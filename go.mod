@@ -1,8 +1,6 @@
 module github.com/dutchcoders/transfer.sh
 
-go 1.22.0
-
-toolchain go1.24.4
+go 1.19
 
 require (
 	github.com/Aetherinox/go-virustotal v0.0.0-20250520084801-0eb8c8f901c8
