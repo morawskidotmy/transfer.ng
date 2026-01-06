@@ -1,1 +1,0 @@
-./buildnrun.sh --listener 127.0.0.1:8080 --proxy-port 4747 --web-path ./web --temp-path /tmp
