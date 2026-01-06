@@ -40,25 +40,7 @@
       text-transform: uppercase;
       font-size: 0.9em;
     }
-    input[type="file"] { 
-      display: block;
-      margin: 10px 0;
-      color: #0f0;
-    }
-    button { 
-      background: #0f0; 
-      color: #000; 
-      border: 1px solid #0f0; 
-      padding: 8px 16px; 
-      cursor: pointer;
-      font-family: "Courier New", monospace;
-      font-weight: bold;
-      margin: 10px 0;
-    }
-    button:hover { 
-      background: #00cc00;
-      box-shadow: 0 0 5px #0f0;
-    }
+
     code { 
       background: #1a1a1a; 
       padding: 1px 4px;
@@ -73,14 +55,7 @@
       margin: 10px 0;
       font-size: 0.85em;
     }
-    .status { 
-      margin: 10px 0; 
-      padding: 5px;
-      border: 1px solid #0f0;
-    }
-    .error { color: #ff0000; }
-    .success { color: #00ff00; }
-    .info { color: #0f0; }
+
     a { color: #0f0; text-decoration: underline; }
     a:hover { background: #0f0; color: #000; }
     .footer {
@@ -101,11 +76,7 @@
 
     <div class="section">
       <div class="label">Upload File</div>
-      <form id="uploadForm">
-        <input type="file" id="fileInput" required>
-        <button type="button" onclick="uploadFile()">[ UPLOAD ]</button>
-      </form>
-      <div id="uploadStatus" class="status" style="display:none;"></div>
+      <pre>curl --upload-file ./file.txt {{.WebAddress}}file.txt</pre>
     </div>
 
     <div class="section">
@@ -133,72 +104,6 @@ Encryption:    -H "X-Encrypt-Password: secret"</pre>
     </div>
   </div>
 
-  <script>
-    function uploadFile() {
-      const fileInput = document.getElementById('fileInput');
-      const statusDiv = document.getElementById('uploadStatus');
-      const file = fileInput.files[0];
 
-      if (!file) {
-        statusDiv.className = 'status error';
-        statusDiv.textContent = '[ ERROR ] No file selected';
-        statusDiv.style.display = 'block';
-        return;
-      }
-
-      statusDiv.className = 'status info';
-      statusDiv.textContent = '[ UPLOADING... ] 0%';
-      statusDiv.style.display = 'block';
-
-      const xhr = new XMLHttpRequest();
-      const url = new URL(window.location.href);
-      url.pathname = '/' + encodeURIComponent(file.name);
-
-      xhr.upload.addEventListener('progress', (e) => {
-        if (e.lengthComputable) {
-          const pct = Math.round((e.loaded / e.total) * 100);
-          statusDiv.textContent = `[ UPLOADING... ] ${pct}%`;
-        }
-      });
-
-      xhr.onload = () => {
-        if (xhr.status === 200) {
-          const response = xhr.responseText.trim();
-          statusDiv.className = 'status success';
-          statusDiv.innerHTML = `[ SUCCESS ]<br>URL: <code>${response}</code><br><a href="${response}" target="_blank">Open</a>`;
-          fileInput.value = '';
-        } else {
-          statusDiv.className = 'status error';
-          statusDiv.textContent = `[ ERROR ] ${xhr.status} ${xhr.statusText}`;
-        }
-      };
-
-      xhr.onerror = () => {
-        statusDiv.className = 'status error';
-        statusDiv.textContent = '[ ERROR ] Upload failed';
-      };
-
-      xhr.open('PUT', url.href);
-      xhr.send(file);
-    }
-
-    document.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      document.body.style.opacity = '0.8';
-    });
-
-    document.addEventListener('dragleave', () => {
-      document.body.style.opacity = '1';
-    });
-
-    document.addEventListener('drop', (e) => {
-      e.preventDefault();
-      document.body.style.opacity = '1';
-      if (e.dataTransfer.files.length > 0) {
-        document.getElementById('fileInput').files = e.dataTransfer.files;
-        uploadFile();
-      }
-    });
-  </script>
 </body>
 </html>
