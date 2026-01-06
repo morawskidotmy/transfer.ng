@@ -4,7 +4,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/morawskidotmy/transfer.ng/cmd"
+	"github.com/dutchcoders/transfer.sh/cmd"
 )
 
 func main() {
