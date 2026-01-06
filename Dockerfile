@@ -1,11 +1,11 @@
-# Default to Go 1.24
-ARG GO_VERSION=1.24
+# Default to Go 1.19
+ARG GO_VERSION=1.19
 FROM golang:${GO_VERSION}-alpine AS build
 
 # Necessary to run 'go get' and to compile the linked binary
 RUN apk add git musl-dev mailcap
 
-WORKDIR /go/src/github.com/dutchcoders/transfer.sh
+WORKDIR /go/src/github.com/morawskidotmy/transfer.ng
 
 COPY go.mod go.sum ./
 
@@ -14,7 +14,7 @@ RUN go mod download
 COPY . .
 
 # build & install server
-RUN CGO_ENABLED=0 go build -tags netgo -ldflags "-X github.com/dutchcoders/transfer.sh/cmd.Version=$(git describe --tags 2>/dev/null || echo 'unknown') -a -s -w -extldflags '-static'" -o /go/bin/transfersh
+RUN CGO_ENABLED=0 go build -tags netgo -ldflags "-X github.com/morawskidotmy/transfer.ng/cmd.Version=$(git describe --tags 2>/dev/null || echo 'unknown') -a -s -w -extldflags '-static'" -o /go/bin/transfersh
 
 ARG PUID=5000 \
     PGID=5000 \
