@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>transfer.sh</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: "Courier New", monospace; 
+      background: #000; 
+      color: #0f0; 
+      padding: 20px;
+      line-height: 1.4;
+    }
+    .container { 
+      max-width: 100ch; 
+      margin: 0 auto;
+      border: 1px solid #0f0;
+      padding: 15px;
+    }
+    .header {
+      text-align: center;
+      border-bottom: 1px solid #0f0;
+      padding-bottom: 10px;
+      margin-bottom: 15px;
+    }
+    .title {
+      font-weight: bold;
+      letter-spacing: 2px;
+    }
+    .section {
+      margin: 15px 0;
+      border: 1px dashed #0f0;
+      padding: 10px;
+    }
+    .label { 
+      font-weight: bold;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      font-size: 0.9em;
+    }
+    input[type="file"] { 
+      display: block;
+      margin: 10px 0;
+      color: #0f0;
+    }
+    button { 
+      background: #0f0; 
+      color: #000; 
+      border: 1px solid #0f0; 
+      padding: 8px 16px; 
+      cursor: pointer;
+      font-family: "Courier New", monospace;
+      font-weight: bold;
+      margin: 10px 0;
+    }
+    button:hover { 
+      background: #00cc00;
+      box-shadow: 0 0 5px #0f0;
+    }
+    code { 
+      background: #1a1a1a; 
+      padding: 1px 4px;
+      border: 1px solid #0f0;
+      display: inline-block;
+    }
+    pre {
+      background: #1a1a1a;
+      padding: 10px;
+      border: 1px solid #0f0;
+      overflow-x: auto;
+      margin: 10px 0;
+      font-size: 0.85em;
+    }
+    .status { 
+      margin: 10px 0; 
+      padding: 5px;
+      border: 1px solid #0f0;
+    }
+    .error { color: #ff0000; }
+    .success { color: #00ff00; }
+    .info { color: #0f0; }
+    a { color: #0f0; text-decoration: underline; }
+    a:hover { background: #0f0; color: #000; }
+    .footer {
+      text-align: center;
+      border-top: 1px solid #0f0;
+      margin-top: 15px;
+      padding-top: 10px;
+      font-size: 0.85em;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="title">TRANSFER.SH</div>
+      <div style="font-size: 0.9em; margin-top: 5px;">[ FILE SHARING SERVICE ]</div>
+    </div>
+
+    <div class="section">
+      <div class="label">Upload File</div>
+      <form id="uploadForm">
+        <input type="file" id="fileInput" required>
+        <button type="button" onclick="uploadFile()">[ UPLOAD ]</button>
+      </form>
+      <div id="uploadStatus" class="status" style="display:none;"></div>
+    </div>
+
+    <div class="section">
+      <div class="label">Server: {{.Hostname}}</div>
+      {{if .MaxUploadSize}}<div style="font-size: 0.9em;">Max Upload: {{.MaxUploadSize}}</div>{{end}}
+      {{if .PurgeTime}}<div style="font-size: 0.9em;">Files purged after: {{.PurgeTime}}</div>{{end}}
+    </div>
+
+    <div class="section">
+      <div class="label">Command Line (PUT)</div>
+      <pre>curl --upload-file ./file.txt {{.WebAddress}}file.txt</pre>
+    </div>
+
+    <div class="section">
+      <div class="label">Options</div>
+      <pre>Max Downloads: -H "Max-Downloads: 1"
+Expiration:    -H "Max-Days: 7"
+Encryption:    -H "X-Encrypt-Password: secret"</pre>
+    </div>
+
+    {{if .EmailContact}}<div class="section" style="font-size: 0.9em;">Contact: <a href="mailto:{{.EmailContact}}">{{.EmailContact}}</a></div>{{end}}
+
+    <div class="footer">
+      Made by DutchCoders
+    </div>
+  </div>
+
+  <script>
+    function uploadFile() {
+      const fileInput = document.getElementById('fileInput');
+      const statusDiv = document.getElementById('uploadStatus');
+      const file = fileInput.files[0];
+
+      if (!file) {
+        statusDiv.className = 'status error';
+        statusDiv.textContent = '[ ERROR ] No file selected';
+        statusDiv.style.display = 'block';
+        return;
+      }
+
+      statusDiv.className = 'status info';
+      statusDiv.textContent = '[ UPLOADING... ] 0%';
+      statusDiv.style.display = 'block';
+
+      const xhr = new XMLHttpRequest();
+      const url = new URL(window.location.href);
+      url.pathname = '/' + encodeURIComponent(file.name);
+
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+          const pct = Math.round((e.loaded / e.total) * 100);
+          statusDiv.textContent = `[ UPLOADING... ] ${pct}%`;
+        }
+      });
+
+      xhr.onload = () => {
+        if (xhr.status === 200) {
+          const response = xhr.responseText.trim();
+          statusDiv.className = 'status success';
+          statusDiv.innerHTML = `[ SUCCESS ]<br>URL: <code>${response}</code><br><a href="${response}" target="_blank">Open</a>`;
+          fileInput.value = '';
+        } else {
+          statusDiv.className = 'status error';
+          statusDiv.textContent = `[ ERROR ] ${xhr.status} ${xhr.statusText}`;
+        }
+      };
+
+      xhr.onerror = () => {
+        statusDiv.className = 'status error';
+        statusDiv.textContent = '[ ERROR ] Upload failed';
+      };
+
+      xhr.open('PUT', url.href);
+      xhr.send(file);
+    }
+
+    document.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      document.body.style.opacity = '0.8';
+    });
+
+    document.addEventListener('dragleave', () => {
+      document.body.style.opacity = '1';
+    });
+
+    document.addEventListener('drop', (e) => {
+      e.preventDefault();
+      document.body.style.opacity = '1';
+      if (e.dataTransfer.files.length > 0) {
+        document.getElementById('fileInput').files = e.dataTransfer.files;
+        uploadFile();
+      }
+    });
+  </script>
+</body>
+</html>
