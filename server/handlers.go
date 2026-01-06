@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -49,29 +50,19 @@ import (
 
 const getPathPart = "get"
 
-var (
-	htmlTemplates = initHTMLTemplates()
-	textTemplates = initTextTemplates()
-)
-
 func stripPrefix(path string) string {
 	return strings.Replace(path, web.Prefix+"/", "", -1)
 }
 
 func initTextTemplates() *textTemplate.Template {
 	templateMap := textTemplate.FuncMap{"format": formatNumber}
-
-	// Templates with functions available to them
 	var templates = textTemplate.New("").Funcs(templateMap)
 	return templates
 }
 
 func initHTMLTemplates() *htmlTemplate.Template {
 	templateMap := htmlTemplate.FuncMap{"format": formatNumber}
-
-	// Templates with functions available to them
 	var templates = htmlTemplate.New("").Funcs(templateMap)
-
 	return templates
 }
 
@@ -330,7 +321,10 @@ func (s *Server) previewHandler(w http.ResponseWriter, r *http.Request) {
 		qrCode,
 	}
 
-	if err := htmlTemplates.ExecuteTemplate(w, templatePath, data); err != nil {
+	s.htmlTemplatesMutex.RLock()
+	err = s.htmlTemplates.ExecuteTemplate(w, templatePath, data)
+	s.htmlTemplatesMutex.RUnlock()
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -380,12 +374,18 @@ func (s *Server) viewHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Vary", "Accept")
 	if acceptsHTML(r.Header) {
-		if err := htmlTemplates.ExecuteTemplate(w, "index.html", data); err != nil {
+		s.htmlTemplatesMutex.RLock()
+		err := s.htmlTemplates.ExecuteTemplate(w, "index.html", data)
+		s.htmlTemplatesMutex.RUnlock()
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	} else {
-		if err := textTemplates.ExecuteTemplate(w, "index.txt", data); err != nil {
+		s.textTemplatesMutex.RLock()
+		err := s.textTemplates.ExecuteTemplate(w, "index.txt", data)
+		s.textTemplatesMutex.RUnlock()
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -428,7 +428,7 @@ func (s *Server) postHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain")
 
-	responseBody := ""
+	var responseBody strings.Builder
 
 	for _, fHeaders := range r.MultipartForm.File {
 		for _, fHeader := range fHeaders {
@@ -523,10 +523,11 @@ func (s *Server) postHandler(w http.ResponseWriter, r *http.Request) {
 			relativeURL, _ := url.Parse(path.Join(s.proxyPath, token, filename))
 			deleteURL, _ := url.Parse(path.Join(s.proxyPath, token, filename, metadata.DeletionToken))
 			w.Header().Add("X-Url-Delete", resolveURL(r, deleteURL, s.proxyPort))
-			responseBody += fmt.Sprintln(getURL(r, s.proxyPort).ResolveReference(relativeURL).String())
+			responseBody.WriteString(getURL(r, s.proxyPort).ResolveReference(relativeURL).String())
+			responseBody.WriteString("\n")
 		}
 	}
-	_, err := w.Write([]byte(responseBody))
+	_, err := w.Write([]byte(responseBody.String()))
 	if err != nil {
 		s.logger.Printf("%s", err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -905,11 +906,16 @@ func (s *Server) checkDeletionToken(ctx context.Context, deletionToken, token, f
 func (s *Server) purgeHandler() {
 	ticker := time.NewTicker(s.purgeInterval)
 	go func() {
+		defer ticker.Stop()
 		for {
-			<-ticker.C
-			err := s.storage.Purge(context.TODO(), s.purgeDays)
-			if err != nil {
-				s.logger.Printf("error cleaning up expired files: %v", err)
+			select {
+			case <-s.purgeCtx.Done():
+				return
+			case <-ticker.C:
+				err := s.storage.Purge(context.TODO(), s.purgeDays)
+				if err != nil {
+					s.logger.Printf("error cleaning up expired files: %v", err)
+				}
 			}
 		}
 	}()
@@ -1327,9 +1333,11 @@ func (s *Server) basicAuthHandler(h http.Handler) http.HandlerFunc {
 			return
 		}
 
+		s.authInitMutex.Lock()
 		if s.htpasswdFile == nil && s.authHtpasswd != "" {
 			htpasswdFile, err := htpasswd.New(s.authHtpasswd, htpasswd.DefaultSystems, nil)
 			if err != nil {
+				s.authInitMutex.Unlock()
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
@@ -1340,6 +1348,7 @@ func (s *Server) basicAuthHandler(h http.Handler) http.HandlerFunc {
 		if s.authIPFilter == nil && s.authIPFilterOptions != nil {
 			s.authIPFilter = newIPFilter(s.authIPFilterOptions)
 		}
+		s.authInitMutex.Unlock()
 
 		w.Header().Set("WWW-Authenticate", "Basic realm=\"Restricted\"")
 
@@ -1355,7 +1364,7 @@ func (s *Server) basicAuthHandler(h http.Handler) http.HandlerFunc {
 			return
 		}
 
-		if !authorized && username == s.authUser && password == s.authPass {
+		if !authorized && subtle.ConstantTimeCompare([]byte(username), []byte(s.authUser)) == 1 && subtle.ConstantTimeCompare([]byte(password), []byte(s.authPass)) == 1 {
 			authorized = true
 		}
 
