@@ -3,12 +3,10 @@ package server
 
 import (
 	"context"
-	cryptoRand "crypto/rand"
 	"crypto/tls"
-	"encoding/binary"
 	"errors"
+	htmlTemplate "html/template"
 	"log"
-	"math/rand"
 	"mime"
 	"net/http"
 	_ "net/http/pprof"
@@ -19,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	textTemplate "text/template"
 	"time"
 
 	"github.com/PuerkitoBio/ghost/handlers"
@@ -120,7 +119,7 @@ func ProfileListener(s string) OptionFn {
 // WebPath sets web path
 func WebPath(s string) OptionFn {
 	return func(srvr *Server) {
-		if s[len(s)-1:] != "/" {
+		if len(s) > 0 && s[len(s)-1:] != "/" {
 			s = filepath.Join(s, "")
 		}
 
@@ -131,7 +130,7 @@ func WebPath(s string) OptionFn {
 // ProxyPath sets proxy path
 func ProxyPath(s string) OptionFn {
 	return func(srvr *Server) {
-		if s[len(s)-1:] != "/" {
+		if len(s) > 0 && s[len(s)-1:] != "/" {
 			s = filepath.Join(s, "")
 		}
 
@@ -149,7 +148,7 @@ func ProxyPort(s string) OptionFn {
 // TempPath sets temp path
 func TempPath(s string) OptionFn {
 	return func(srvr *Server) {
-		if s[len(s)-1:] != "/" {
+		if len(s) > 0 && s[len(s)-1:] != "/" {
 			s = filepath.Join(s, "")
 		}
 
@@ -167,6 +166,7 @@ func LogFile(logger *log.Logger, s string) OptionFn {
 
 		logger.SetOutput(f)
 		srvr.logger = logger
+		srvr.logFile = f
 	}
 }
 
@@ -316,10 +316,12 @@ type Server struct {
 	authHtpasswd        string
 	authIPFilterOptions *IPFilterOptions
 
-	htpasswdFile *htpasswd.File
-	authIPFilter *ipFilter
+	htpasswdFile      *htpasswd.File
+	authIPFilter      *ipFilter
+	authInitMutex     sync.Mutex
 
-	logger *log.Logger
+	logger  *log.Logger
+	logFile *os.File
 
 	tlsConfig *tls.Config
 
@@ -332,6 +334,8 @@ type Server struct {
 
 	purgeDays     time.Duration
 	purgeInterval time.Duration
+	purgeCtx      context.Context
+	purgeCancel   context.CancelFunc
 
 	storage storage.Storage
 
@@ -364,6 +368,11 @@ type Server struct {
 	Certificate string
 
 	LetsEncryptCache string
+
+	htmlTemplates      *htmlTemplate.Template
+	htmlTemplatesMutex sync.RWMutex
+	textTemplates      *textTemplate.Template
+	textTemplatesMutex sync.RWMutex
 }
 
 // New is the factory fot Server
@@ -379,16 +388,7 @@ func New(options ...OptionFn) (*Server, error) {
 	return s, nil
 }
 
-var theRand *rand.Rand
 
-func init() {
-	var seedBytes [8]byte
-	if _, err := cryptoRand.Read(seedBytes[:]); err != nil {
-		panic("cannot obtain cryptographically secure seed")
-	}
-
-	theRand = rand.New(rand.NewSource(int64(binary.LittleEndian.Uint64(seedBytes[:]))))
-}
 
 // Run starts Server
 func (s *Server) Run() {
@@ -406,6 +406,9 @@ func (s *Server) Run() {
 
 	r := mux.NewRouter()
 
+	s.htmlTemplates = initHTMLTemplates()
+	s.textTemplates = initTextTemplates()
+
 	var fs http.FileSystem
 
 	if s.webPath != "" {
@@ -413,8 +416,12 @@ func (s *Server) Run() {
 
 		fs = http.Dir(s.webPath)
 
-		htmlTemplates, _ = htmlTemplates.ParseGlob(filepath.Join(s.webPath, "*.html"))
-		textTemplates, _ = textTemplates.ParseGlob(filepath.Join(s.webPath, "*.txt"))
+		s.htmlTemplatesMutex.Lock()
+		s.htmlTemplates, _ = s.htmlTemplates.ParseGlob(filepath.Join(s.webPath, "*.html"))
+		s.htmlTemplatesMutex.Unlock()
+		s.textTemplatesMutex.Lock()
+		s.textTemplates, _ = s.textTemplates.ParseGlob(filepath.Join(s.webPath, "*.txt"))
+		s.textTemplatesMutex.Unlock()
 	} else {
 		fs = &assetfs.AssetFS{
 			Asset:    web.Asset,
@@ -432,13 +439,17 @@ func (s *Server) Run() {
 			}
 
 			if strings.HasSuffix(path, ".html") {
-				_, err = htmlTemplates.New(stripPrefix(path)).Parse(string(bytes))
+				s.htmlTemplatesMutex.Lock()
+				_, err = s.htmlTemplates.New(stripPrefix(path)).Parse(string(bytes))
+				s.htmlTemplatesMutex.Unlock()
 				if err != nil {
 					s.logger.Println("Unable to parse html template", err)
 				}
 			}
 			if strings.HasSuffix(path, ".txt") {
-				_, err = textTemplates.New(stripPrefix(path)).Parse(string(bytes))
+				s.textTemplatesMutex.Lock()
+				_, err = s.textTemplates.New(stripPrefix(path)).Parse(string(bytes))
+				s.textTemplatesMutex.Unlock()
 				if err != nil {
 					s.logger.Println("Unable to parse text template", err)
 				}
@@ -572,6 +583,8 @@ func (s *Server) Run() {
 
 	s.logger.Printf("---------------------------")
 
+	s.purgeCtx, s.purgeCancel = context.WithCancel(context.Background())
+
 	if s.purgeDays > 0 {
 		go s.purgeHandler()
 	}
@@ -584,6 +597,12 @@ func (s *Server) Run() {
 		<-term
 	} else {
 		s.logger.Printf("No listener active.")
+	}
+
+	s.purgeCancel()
+	
+	if s.logFile != nil {
+		s.logFile.Close()
 	}
 
 	s.logger.Printf("Server stopped.")

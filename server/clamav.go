@@ -53,8 +53,8 @@ func (s *Server) scanHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) performScan(path string) (string, error) {
 	c := clamd.NewClamd(s.ClamAVDaemonHost)
 
-	responseCh := make(chan chan *clamd.ScanResult)
-	errCh := make(chan error)
+	responseCh := make(chan chan *clamd.ScanResult, 1)
+	errCh := make(chan error, 1)
 	go func(responseCh chan chan *clamd.ScanResult, errCh chan error) {
 		response, err := c.ScanFile(path)
 		if err != nil {
