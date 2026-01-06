@@ -1,0 +1,25 @@
+================== TRANSFER.SH ==================
+
+UPLOAD
+======
+curl --upload-file ./file.txt {{.WebAddress}}file.txt
+
+OPTIONS
+=======
+Max Downloads: -H "Max-Downloads: 1"
+Expiration:    -H "Max-Days: 7"
+Encryption:    -H "X-Encrypt-Password: secret"
+
+DOWNLOAD
+========
+curl {{.WebAddress}}TOKEN/filename
+
+SERVER INFO
+===========
+Host:      {{.Hostname}}
+Address:   {{.WebAddress}}
+{{if .MaxUploadSize}}Max Upload: {{.MaxUploadSize}}{{end}}
+{{if .PurgeTime}}Purge Time: {{.PurgeTime}}{{end}}
+{{if .EmailContact}}Contact:   {{.EmailContact}}{{end}}
+
+================================================

@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Filename}}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: "Courier New", monospace; 
+      background: #000; 
+      color: #0f0; 
+      padding: 20px;
+      line-height: 1.4;
+    }
+    .container { 
+      max-width: 100%; 
+      margin: 0 auto;
+      padding: 15px;
+    }
+    .header {
+      text-align: center;
+      border-bottom: 1px solid #0f0;
+      padding-bottom: 10px;
+      margin-bottom: 15px;
+      border: 1px solid #0f0;
+      padding: 10px;
+    }
+    .image-section {
+      border: 1px solid #0f0;
+      padding: 15px;
+      margin: 15px auto;
+      text-align: center;
+      max-width: 1200px;
+    }
+    img { 
+      max-width: 100%;
+      height: auto;
+      border: 1px solid #0f0;
+      margin: 10px 0;
+    }
+    .info-section {
+      border: 1px dashed #0f0;
+      padding: 10px;
+      margin: 15px auto;
+      max-width: 100ch;
+    }
+    .label { 
+      font-weight: bold;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      font-size: 0.9em;
+    }
+    .info-row { margin: 6px 0; }
+    button { 
+      background: #0f0; 
+      color: #000; 
+      border: 1px solid #0f0; 
+      padding: 8px 16px; 
+      cursor: pointer;
+      font-family: "Courier New", monospace;
+      font-weight: bold;
+      margin: 8px 4px 8px 0;
+    }
+    button:hover { 
+      background: #00cc00;
+      box-shadow: 0 0 5px #0f0;
+    }
+    code { 
+      background: #1a1a1a; 
+      padding: 1px 4px;
+      border: 1px solid #0f0;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      [ IMAGE PREVIEW ]
+    </div>
+
+    <div class="image-section">
+      <img src="{{.URLGet}}" alt="{{.Filename}}">
+    </div>
+
+    <div class="info-section">
+      <div class="label">File Info</div>
+      <div class="info-row">Name: <code>{{.Filename}}</code></div>
+      <div class="info-row">Size: <code>{{.ContentLength}} bytes</code></div>
+      <div class="info-row">Type: <code>{{.ContentType}}</code></div>
+    </div>
+
+    <div class="info-section">
+      <div class="label">Actions</div>
+      <button onclick="window.location.href='{{.URLGet}}'">[ DOWNLOAD ]</button>
+      <button onclick="copyToClipboard('{{.URLGet}}')">[ COPY LINK ]</button>
+    </div>
+  </div>
+
+  <script>
+    function copyToClipboard(text) {
+      navigator.clipboard.writeText(text).then(() => {
+        alert('Link copied!');
+      });
+    }
+  </script>
+</body>
+</html>
