@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>transfer.sh</title>
+  <title>{{.Hostname}} - File Sharing</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { 
@@ -11,39 +11,67 @@
       background: #000; 
       color: #0f0; 
       padding: 20px;
-      line-height: 1.4;
+      line-height: 1.6;
     }
     .container { 
-      max-width: 100ch; 
+      max-width: 110ch; 
       margin: 0 auto;
       border: 1px solid #0f0;
-      padding: 15px;
+      padding: 20px;
     }
     .header {
       text-align: center;
-      border-bottom: 1px solid #0f0;
-      padding-bottom: 10px;
-      margin-bottom: 15px;
+      border-bottom: 2px solid #0f0;
+      padding-bottom: 15px;
+      margin-bottom: 20px;
     }
     .title {
       font-weight: bold;
       letter-spacing: 2px;
+      font-size: 1.2em;
+    }
+    .subtitle {
+      font-size: 0.9em;
+      margin-top: 5px;
+      opacity: 0.8;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr; }
     }
     .section {
-      margin: 15px 0;
-      border: 1px dashed #0f0;
-      padding: 10px;
+      border: 1px solid #0f0;
+      padding: 15px;
+    }
+    .section-header {
+      display: flex;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .section-icon {
+      margin-right: 10px;
+      font-weight: bold;
+      font-size: 1.2em;
     }
     .label { 
       font-weight: bold;
-      margin-bottom: 8px;
       text-transform: uppercase;
-      font-size: 0.9em;
+      font-size: 0.95em;
+      margin: 12px 0 8px 0;
+      border-bottom: 1px dotted #0f0;
+      padding-bottom: 4px;
     }
-
+    .label:first-of-type {
+      margin-top: 0;
+    }
     code { 
       background: #1a1a1a; 
-      padding: 1px 4px;
+      padding: 2px 5px;
       border: 1px solid #0f0;
       display: inline-block;
     }
@@ -52,58 +80,210 @@
       padding: 10px;
       border: 1px solid #0f0;
       overflow-x: auto;
-      margin: 10px 0;
-      font-size: 0.85em;
+      margin: 8px 0;
+      font-size: 0.8em;
+      line-height: 1.4;
     }
-
+    .description {
+      font-size: 0.9em;
+      margin: 8px 0;
+      opacity: 0.9;
+    }
+    .option-item {
+      margin: 8px 0;
+      font-size: 0.9em;
+    }
+    .option-name {
+      font-weight: bold;
+      color: #0f0;
+    }
+    .option-desc {
+      margin-left: 10px;
+      opacity: 0.8;
+    }
     a { color: #0f0; text-decoration: underline; }
     a:hover { background: #0f0; color: #000; }
+    .server-info {
+      border: 1px solid #0f0;
+      padding: 12px;
+      margin-bottom: 20px;
+      background: #0a0a0a;
+    }
+    .info-row {
+      margin: 5px 0;
+      font-size: 0.9em;
+    }
+    .info-label {
+      font-weight: bold;
+      display: inline-block;
+      min-width: 150px;
+    }
     .footer {
       text-align: center;
       border-top: 1px solid #0f0;
-      margin-top: 15px;
+      margin-top: 20px;
       padding-top: 10px;
       font-size: 0.85em;
+      opacity: 0.7;
     }
   </style>
 </head>
 <body>
   <div class="container">
     <div class="header">
-      <div class="title">TRANSFER.SH</div>
-      <div style="font-size: 0.9em; margin-top: 5px;">[ FILE SHARING SERVICE ]</div>
+      <div class="title">{{.Hostname}}</div>
+      <div class="subtitle">[ SECURE FILE SHARING SERVICE ]</div>
     </div>
 
+    <div class="server-info">
+      <div class="info-row">
+        <span class="info-label">Domain:</span>
+        <code>{{.WebAddress}}</code>
+      </div>
+      {{if .MaxUploadSize}}
+      <div class="info-row">
+        <span class="info-label">Max Upload Size:</span>
+        {{.MaxUploadSize}}
+      </div>
+      {{end}}
+      {{if .PurgeTime}}
+      <div class="info-row">
+        <span class="info-label">File Retention:</span>
+        Files are deleted after {{.PurgeTime}}
+      </div>
+      {{end}}
+    </div>
+
+    <div class="grid">
+      <!-- UPLOAD SECTION -->
+      <div class="section">
+        <div class="section-header">
+          <div class="section-icon">↑</div>
+          <div style="font-weight: bold; font-size: 1.05em;">UPLOAD FILES</div>
+        </div>
+
+        <div class="label">Basic Upload</div>
+        <div class="description">
+          Upload a file using curl with a single command:
+        </div>
+        <pre>curl --upload-file ./file.txt {{.WebAddress}}file.txt</pre>
+
+        <div class="label">Multiple Files</div>
+        <div class="description">
+          Upload multiple files at once:
+        </div>
+        <pre>curl --upload-file ./file1.txt {{.WebAddress}}file1.txt
+curl --upload-file ./file2.txt {{.WebAddress}}file2.txt</pre>
+
+        <div class="label">Upload from Stdin</div>
+        <div class="description">
+          Pipe data directly without saving to disk:
+        </div>
+        <pre>cat data.txt | curl -T - {{.WebAddress}}output.txt</pre>
+
+        <div class="label">Upload with Custom Headers</div>
+        <div class="description">
+          Add options while uploading:
+        </div>
+        <pre>curl -T file.txt {{.WebAddress}}file.txt \
+  -H "Max-Downloads: 5" \
+  -H "Max-Days: 14"</pre>
+      </div>
+
+      <!-- DOWNLOAD SECTION -->
+      <div class="section">
+        <div class="section-header">
+          <div class="section-icon">↓</div>
+          <div style="font-weight: bold; font-size: 1.05em;">DOWNLOAD FILES</div>
+        </div>
+
+        <div class="label">Get Download Link</div>
+        <div class="description">
+          After uploading, you'll receive a download link:
+        </div>
+        <pre>{{.WebAddress}}token123/file.txt</pre>
+
+        <div class="label">Download via Curl</div>
+        <div class="description">
+          Download a file using curl:
+        </div>
+        <pre>curl {{.WebAddress}}token123/file.txt -o file.txt</pre>
+
+        <div class="label">Direct Download Path</div>
+        <div class="description">
+          Use the <code>/get/</code> path for direct downloads (no preview):
+        </div>
+        <pre>curl {{.WebAddress}}get/token123/file.txt -o file.txt</pre>
+
+        <div class="label">Browser Download</div>
+        <div class="description">
+          Or use the <code>/download/</code> path and open in browser:
+        </div>
+        <pre>{{.WebAddress}}download/token123/file.txt</pre>
+
+        <div class="label">Encrypted Downloads</div>
+        <div class="description">
+          If file is encrypted, provide the password:
+        </div>
+        <pre>curl {{.WebAddress}}get/token123/file.txt \
+  -H "X-Decrypt-Password: your_password" \
+  -o file.txt</pre>
+      </div>
+    </div>
+
+    <!-- OPTIONS SECTION -->
     <div class="section">
-      <div class="label">Upload File</div>
-      <pre>curl --upload-file ./file.txt {{.WebAddress}}file.txt</pre>
+      <div class="section-header">
+        <div class="section-icon">⚙</div>
+        <div style="font-weight: bold; font-size: 1.05em;">UPLOAD OPTIONS</div>
+      </div>
+
+      <div class="label">Max Downloads</div>
+      <div class="option-item">
+        <span class="option-name">Header:</span>
+        <code>Max-Downloads: N</code>
+      </div>
+      <div class="option-desc">
+        Limit how many times a file can be downloaded before deletion. Example: <code>Max-Downloads: 1</code> for one-time download.
+      </div>
+
+      <div class="label">Expiration Time</div>
+      <div class="option-item">
+        <span class="option-name">Header:</span>
+        <code>Max-Days: N</code>
+      </div>
+      <div class="option-desc">
+        File automatically deletes after N days. Example: <code>Max-Days: 7</code> for one week.
+      </div>
+
+      <div class="label">Password Protection (Encryption)</div>
+      <div class="option-item">
+        <span class="option-name">Header:</span>
+        <code>X-Encrypt-Password: password</code>
+      </div>
+      <div class="option-desc">
+        Encrypt file with a password. Recipient must provide the same password when downloading.
+      </div>
+
+      <div class="label">Example: All Options Combined</div>
+      <pre>curl -T file.txt {{.WebAddress}}file.txt \
+  -H "Max-Downloads: 3" \
+  -H "Max-Days: 14" \
+  -H "X-Encrypt-Password: secure123"</pre>
     </div>
 
-    <div class="section">
-      <div class="label">Server: {{.Hostname}}</div>
-      {{if .MaxUploadSize}}<div style="font-size: 0.9em;">Max Upload: {{.MaxUploadSize}}</div>{{end}}
-      {{if .PurgeTime}}<div style="font-size: 0.9em;">Files purged after: {{.PurgeTime}}</div>{{end}}
+    {{if .EmailContact}}
+    <div class="section" style="text-align: center; padding: 20px;">
+      <div style="font-size: 0.9em;">
+        Questions or issues? Contact: <a href="mailto:{{.EmailContact}}">{{.EmailContact}}</a>
+      </div>
     </div>
-
-    <div class="section">
-      <div class="label">Command Line (PUT)</div>
-      <pre>curl --upload-file ./file.txt {{.WebAddress}}file.txt</pre>
-    </div>
-
-    <div class="section">
-      <div class="label">Options</div>
-      <pre>Max Downloads: -H "Max-Downloads: 1"
-Expiration:    -H "Max-Days: 7"
-Encryption:    -H "X-Encrypt-Password: secret"</pre>
-    </div>
-
-    {{if .EmailContact}}<div class="section" style="font-size: 0.9em;">Contact: <a href="mailto:{{.EmailContact}}">{{.EmailContact}}</a></div>{{end}}
+    {{end}}
 
     <div class="footer">
-      Made by DutchCoders & morawskidotmy
+      Made by DutchCoders & morawskidotmy | Powered by transfer.ng
     </div>
   </div>
-
 
 </body>
 </html>

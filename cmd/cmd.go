@@ -301,6 +301,12 @@ var globalFlags = []cli.Flag{
 		Value:   "",
 		EnvVars: []string{"CORS_DOMAINS"},
 	},
+	&cli.BoolFlag{
+		Name:    "insecure",
+		Usage:   "disable IP filtering and CORS checks (security managed by reverse proxy/firewall)",
+		Value:   false,
+		EnvVars: []string{"INSECURE"},
+	},
 	&cli.IntFlag{
 		Name:    "random-token-length",
 		Usage:   "",
@@ -458,28 +464,32 @@ func New() *Cmd {
 			options = append(options, server.HTTPAuthHtpasswd(httpAuthHtpasswd))
 		}
 
-		if httpAuthIPWhitelist := c.String("http-auth-ip-whitelist"); httpAuthIPWhitelist != "" {
+		insecure := c.Bool("insecure")
+
+		if !insecure {
+			if httpAuthIPWhitelist := c.String("http-auth-ip-whitelist"); httpAuthIPWhitelist != "" {
+				ipFilterOptions := server.IPFilterOptions{}
+				ipFilterOptions.AllowedIPs = strings.Split(httpAuthIPWhitelist, ",")
+				ipFilterOptions.BlockByDefault = true
+				options = append(options, server.HTTPAUTHFilterOptions(ipFilterOptions))
+			}
+
+			applyIPFilter := false
 			ipFilterOptions := server.IPFilterOptions{}
-			ipFilterOptions.AllowedIPs = strings.Split(httpAuthIPWhitelist, ",")
-			ipFilterOptions.BlockByDefault = true
-			options = append(options, server.HTTPAUTHFilterOptions(ipFilterOptions))
-		}
+			if ipWhitelist := c.String("ip-whitelist"); ipWhitelist != "" {
+				applyIPFilter = true
+				ipFilterOptions.AllowedIPs = strings.Split(ipWhitelist, ",")
+				ipFilterOptions.BlockByDefault = true
+			}
 
-		applyIPFilter := false
-		ipFilterOptions := server.IPFilterOptions{}
-		if ipWhitelist := c.String("ip-whitelist"); ipWhitelist != "" {
-			applyIPFilter = true
-			ipFilterOptions.AllowedIPs = strings.Split(ipWhitelist, ",")
-			ipFilterOptions.BlockByDefault = true
-		}
+			if ipBlacklist := c.String("ip-blacklist"); ipBlacklist != "" {
+				applyIPFilter = true
+				ipFilterOptions.BlockedIPs = strings.Split(ipBlacklist, ",")
+			}
 
-		if ipBlacklist := c.String("ip-blacklist"); ipBlacklist != "" {
-			applyIPFilter = true
-			ipFilterOptions.BlockedIPs = strings.Split(ipBlacklist, ",")
-		}
-
-		if applyIPFilter {
-			options = append(options, server.FilterOptions(ipFilterOptions))
+			if applyIPFilter {
+				options = append(options, server.FilterOptions(ipFilterOptions))
+			}
 		}
 
 		switch provider := c.String("provider"); provider {
