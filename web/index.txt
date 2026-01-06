@@ -1,18 +1,4 @@
-================== TRANSFER.SH ==================
-
-UPLOAD
-======
-curl --upload-file ./file.txt {{.WebAddress}}file.txt
-
-OPTIONS
-=======
-Max Downloads: -H "Max-Downloads: 1"
-Expiration:    -H "Max-Days: 7"
-Encryption:    -H "X-Encrypt-Password: secret"
-
-DOWNLOAD
-========
-curl {{.WebAddress}}TOKEN/filename
+=============== FILE SHARING SERVICE ===============
 
 SERVER INFO
 ===========
@@ -22,4 +8,33 @@ Address:   {{.WebAddress}}
 {{if .PurgeTime}}Purge Time: {{.PurgeTime}}{{end}}
 {{if .EmailContact}}Contact:   {{.EmailContact}}{{end}}
 
-================================================
+UPLOAD FILE
+===========
+curl --upload-file ./file.txt {{.WebAddress}}file.txt
+
+UPLOAD WITH OPTIONS
+===================
+curl -T file.txt {{.WebAddress}}file.txt \
+  -H "Max-Downloads: 3" \
+  -H "Max-Days: 14" \
+  -H "X-Encrypt-Password: secret"
+
+DOWNLOAD FILE
+=============
+curl {{.WebAddress}}TOKEN/filename -o filename
+curl {{.WebAddress}}get/TOKEN/filename -o filename
+curl {{.WebAddress}}download/TOKEN/filename -o filename
+
+DOWNLOAD ENCRYPTED FILE
+=======================
+curl {{.WebAddress}}get/TOKEN/filename \
+  -H "X-Decrypt-Password: secret" -o filename
+
+UPLOAD OPTIONS
+==============
+Max-Downloads: Limit download count (e.g., 1 for single download)
+Max-Days:      Auto-delete after N days
+X-Encrypt-Password: Encrypt file with password
+
+====================================================
+Made by DutchCoders & morawskidotmy | transfer.ng

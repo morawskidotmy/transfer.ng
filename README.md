@@ -206,6 +206,7 @@ gdrive-chunk-size | chunk size for gdrive upload in megabytes, must be lower tha
 lets-encrypt-hosts | hosts to use for lets encrypt certificates (comma separated)                   |                               | HOSTS                         |
 log | path to log file                                                                              |                               | LOG                           |
 cors-domains | comma separated list of domains for CORS, setting it enable CORS                     |                               | CORS_DOMAINS                  |
+insecure | **(added for next gen)** disable IP filtering and CORS checks (security managed by reverse proxy) | false                         | INSECURE                      |
 clamav-host | host for clamav feature                                                               |                               | CLAMAV_HOST                   |
 perform-clamav-prescan | prescan every upload using clamav (clamav-host must be local clamd unix socket)    |                       | PERFORM_CLAMAV_PRESCAN        |
 rate-limit | request per minute                                                                     |                               | RATE_LIMIT                    |
