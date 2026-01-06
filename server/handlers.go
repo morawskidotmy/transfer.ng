@@ -33,11 +33,11 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 	"github.com/ProtonMail/gopenpgp/v2/constants"
-	"github.com/morawskidotmy/transfer.ng/server/storage"
+	"github.com/dutchcoders/transfer.sh/server/storage"
 	"github.com/tg123/go-htpasswd"
 	"github.com/tomasen/realip"
 
-	web "github.com/morawskidotmy/transfer.ng/web"
+	web "github.com/dutchcoders/transfer.sh-web"
 	"github.com/gorilla/mux"
 	"github.com/microcosm-cc/bluemonday"
 	blackfriday "github.com/russross/blackfriday/v2"
