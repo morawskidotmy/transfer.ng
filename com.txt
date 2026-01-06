@@ -1,0 +1,11 @@
+# Build with buildx and load into local Docker
+docker buildx build --load -t transfer.ng .
+
+# Run the container
+docker run -p 127.0.0.1:4747:8080 \
+  -v /mnt/HC_Volume_103099569/uploads:/uploads \
+  transfer.ng \
+  --listener 0.0.0.0:8080 \
+  --web-path ./web \
+  --provider local \
+  --basedir /uploads
