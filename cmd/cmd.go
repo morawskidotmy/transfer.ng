@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/dutchcoders/transfer.sh/server/storage"
@@ -15,8 +17,36 @@ import (
 	"google.golang.org/api/googleapi"
 )
 
-// Version is inject at build time
 var Version = "0.0.0"
+
+func parseSize(s string) (int64, error) {
+	re := regexp.MustCompile(`^(\d+(?:\.\d+)?)\s*([kmgt]?b?)$`)
+	matches := re.FindStringSubmatch(strings.ToLower(strings.TrimSpace(s)))
+	if matches == nil {
+		return 0, fmt.Errorf("invalid size format: %s", s)
+	}
+
+	value, err := strconv.ParseFloat(matches[1], 64)
+	if err != nil {
+		return 0, err
+	}
+
+	unit := matches[2]
+	multiplier := int64(1)
+
+	switch unit {
+	case "kb", "k":
+		multiplier = 1024
+	case "mb", "m":
+		multiplier = 1024 * 1024
+	case "gb", "g":
+		multiplier = 1024 * 1024 * 1024
+	case "tb", "t":
+		multiplier = 1024 * 1024 * 1024 * 1024
+	}
+
+	return int64(value * float64(multiplier)), nil
+}
 var helpTemplate = `NAME:
 {{.Name}} - {{.Usage}}
 
@@ -313,6 +343,12 @@ var globalFlags = []cli.Flag{
 		Value:   10,
 		EnvVars: []string{"RANDOM_TOKEN_LENGTH"},
 	},
+	&cli.StringFlag{
+		Name:    "compress-large",
+		Usage:   "compress files larger than this size (e.g. 10m, 1g)",
+		Value:   "10m",
+		EnvVars: []string{"COMPRESS_LARGE"},
+	},
 }
 
 // Cmd wraps cli.app
@@ -433,6 +469,14 @@ func New() *Cmd {
 
 		v := c.Int("random-token-length")
 		options = append(options, server.RandomTokenLength(v))
+
+		if v := c.String("compress-large"); v != "" {
+			bytes, err := parseSize(v)
+			if err != nil {
+				return err
+			}
+			options = append(options, server.CompressionThreshold(bytes))
+		}
 
 		purgeDays := c.Int("purge-days")
 		purgeInterval := c.Int("purge-interval")

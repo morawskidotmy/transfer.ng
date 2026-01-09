@@ -556,22 +556,15 @@ func (s *Server) cleanTmpFile(f *os.File) {
 }
 
 type metadata struct {
-	// ContentType is the original uploading content type
-	ContentType string
-	// ContentLength is is the original uploading content length
-	ContentLength int64
-	// Downloads is the actual number of downloads
-	Downloads int
-	// MaxDownloads contains the maximum numbers of downloads
-	MaxDownloads int
-	// MaxDate contains the max age of the file
-	MaxDate time.Time
-	// DeletionToken contains the token to match against for deletion
-	DeletionToken string
-	// Encrypted contains if the file was encrypted
-	Encrypted bool
-	// DecryptedContentType is the original uploading content type
+	ContentType         string
+	ContentLength       int64
+	Downloads           int
+	MaxDownloads        int
+	MaxDate             time.Time
+	DeletionToken       string
+	Encrypted           bool
 	DecryptedContentType string
+	Compressed          bool
 }
 
 func metadataForRequest(contentType string, contentLength int64, randomTokenLength int, r *http.Request) metadata {
@@ -690,6 +683,12 @@ func (s *Server) putHandler(w http.ResponseWriter, r *http.Request) {
 
 	metadata := metadataForRequest(contentType, contentLength, s.randomTokenLength, r)
 
+	shouldCompress := s.compressionThreshold > 0 && contentLength > s.compressionThreshold
+	if shouldCompress {
+		metadata.Compressed = true
+		s.logger.Printf("File %s will be compressed (size: %d bytes)", filename, contentLength)
+	}
+
 	buffer := &bytes.Buffer{}
 	if err := json.NewEncoder(buffer).Encode(metadata); err != nil {
 		s.logger.Printf("%s", err.Error())
@@ -711,6 +710,17 @@ func (s *Server) putHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "Could not crypt file", http.StatusInternalServerError)
 		return
+	}
+
+	if shouldCompress {
+		compressedBuffer := &bytes.Buffer{}
+		_, err := CompressStream(compressedBuffer, reader)
+		if err != nil {
+			s.logger.Printf("Error compressing file: %s", err.Error())
+			http.Error(w, "Could not compress file", http.StatusInternalServerError)
+			return
+		}
+		reader = io.NopCloser(compressedBuffer)
 	}
 
 	if err = s.storage.Put(r.Context(), putToken, filename, reader, contentType, uint64(contentLength)); err != nil {
@@ -1252,6 +1262,17 @@ func (s *Server) getHandler(w http.ResponseWriter, r *http.Request) {
 
 	if metadata.Encrypted && len(password) > 0 {
 		contentType = metadata.DecryptedContentType
+		contentLength = uint64(metadata.ContentLength)
+	}
+
+	if metadata.Compressed {
+		compressionReader, err := NewCompressionReader(reader, true)
+		if err != nil {
+			s.logger.Printf("Error creating decompression reader: %s", err.Error())
+			http.Error(w, "Could not decompress file", http.StatusInternalServerError)
+			return
+		}
+		reader = compressionReader
 		contentLength = uint64(metadata.ContentLength)
 	}
 

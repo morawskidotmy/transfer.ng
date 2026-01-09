@@ -199,6 +199,13 @@ func RandomTokenLength(length int) OptionFn {
 	}
 }
 
+// CompressionThreshold sets compression threshold
+func CompressionThreshold(bytes int64) OptionFn {
+	return func(srvr *Server) {
+		srvr.compressionThreshold = bytes
+	}
+}
+
 // Purge sets purge days and option
 func Purge(days, interval int) OptionFn {
 	return func(srvr *Server) {
@@ -373,6 +380,8 @@ type Server struct {
 	htmlTemplatesMutex sync.RWMutex
 	textTemplates      *textTemplate.Template
 	textTemplatesMutex sync.RWMutex
+
+	compressionThreshold int64
 }
 
 // New is the factory fot Server
