@@ -216,10 +216,41 @@ max-upload-size | max upload size in kilobytes                                  
 purge-days | number of days after the uploads are purged automatically                              |                               | PURGE_DAYS                    |   
 purge-interval | interval (hours) to run automatic purge for (excluding S3 and Storj)               |                               | PURGE_INTERVAL                |   
 random-token-length | length of random token for upload path (double the size for delete path)      | 6                             | RANDOM_TOKEN_LENGTH           |   
+compress-large | **(added for next gen)** compress files larger than specified size using zstd (e.g. 10m, 1g) | 10m                           | COMPRESS_LARGE                |   
 
 If you want to use TLS using lets encrypt certificates, set lets-encrypt-hosts to your domain, set tls-listener to :443 and enable force-https.
 
 If you want to use TLS using your own certificates, set tls-listener to :443, force-https, tls-cert-file and tls-private-key.
+
+<br />
+
+## Compression
+
+Files larger than the specified `compress-large` threshold are automatically compressed with zstd on upload and decompressed on download. This is seamless to users - they upload and download files normally, but storage usage is reduced.
+
+Supported size formats: `10m`, `100mb`, `1g`, `2.5g`, `512kb`, etc.
+
+### Examples
+
+```bash
+transfer.sh --provider=local --compress-large=10m
+```
+
+```bash
+transfer.sh --provider=s3 --compress-large=50m
+```
+
+Disable compression entirely:
+
+```bash
+transfer.sh --provider=local --compress-large=0
+```
+
+Or set via environment variable:
+
+```bash
+COMPRESS_LARGE=100m transfer.sh --provider=local
+```
 
 <br />
 
