@@ -1,4 +1,4 @@
-# transfer.ng [![Go Report Card](https://goreportcard.com/badge/github.com/morawskidotmy/transfer.ng)](https://goreportcard.com/report/github.com/morawskidotmy/transfer.ng)(BETTER SCORE THAN ORIGINAL (by 25%) RAAAAH) [![Build Status](https://github.com/morawskidotmy/transfer.ng/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/morawskidotmy/transfer.ng/actions/workflows/test.yml?query=branch%3Amain)
+# transfer.ng [![Go Report Card](https://goreportcard.com/badge/github.com/morawskidotmy/transfer.ng)](https://goreportcard.com/report/github.com/morawskidotmy/transfer.ng)<small>(BETTER SCORE THAN ORIGINAL (by 25%) RAAAAH)</small> [![Build Status](https://github.com/morawskidotmy/transfer.ng/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/morawskidotmy/transfer.ng/actions/workflows/test.yml?query=branch%3Amain)
 
 Easy and fast file sharing from the command-line. This code contains the server with everything you need to create your own instance.
 
