@@ -4,6 +4,8 @@ Easy and fast file sharing from the command-line. This code contains the server 
 
 Transfer.sh currently supports the s3 (Amazon S3), gdrive (Google Drive), storj (Storj) providers, and local file system (local).
 
+This transfer.ng fork includes +259 additional file extensions for improved type recognition.
+
 <br />
 
 ---
