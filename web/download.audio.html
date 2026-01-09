@@ -31,10 +31,27 @@
       margin: 15px 0;
       text-align: center;
     }
+    @media (max-width: 768px) {
+      .audio-section {
+        padding: 12px;
+        margin: 12px 0;
+      }
+    }
+    @media (max-width: 480px) {
+      .audio-section {
+        padding: 10px;
+        margin: 10px 0;
+      }
+    }
     audio { 
       width: 100%;
       max-width: 400px;
       margin: 10px 0;
+    }
+    @media (max-width: 480px) {
+      audio {
+        max-width: 100%;
+      }
     }
     .info-section {
       border: 1px dashed #0f0;
@@ -57,6 +74,15 @@
       font-family: "Courier New", monospace;
       font-weight: bold;
       margin: 8px 4px 8px 0;
+      font-size: 0.95em;
+    }
+    @media (max-width: 480px) {
+      button {
+        display: block;
+        width: 100%;
+        margin: 8px 0;
+        padding: 10px 8px;
+      }
     }
     button:hover { 
       background: #00cc00;
