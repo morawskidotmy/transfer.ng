@@ -11,8 +11,8 @@ import (
 
 	"github.com/morawskidotmy/transfer.ng/server/storage"
 
-	"github.com/morawskidotmy/transfer.ng/server"
 	"github.com/fatih/color"
+	"github.com/morawskidotmy/transfer.ng/server"
 	"github.com/urfave/cli/v2"
 	"google.golang.org/api/googleapi"
 )
@@ -47,6 +47,7 @@ func parseSize(s string) (int64, error) {
 
 	return int64(value * float64(multiplier)), nil
 }
+
 var helpTemplate = `NAME:
 {{.Name}} - {{.Usage}}
 
@@ -357,7 +358,7 @@ type Cmd struct {
 }
 
 func versionCommand(_ *cli.Context) error {
-	fmt.Println(color.YellowString("transfer.sh %s: Easy file sharing from the command line", Version))
+	fmt.Println(color.YellowString("transfer.ng %s: Easy file sharing from the command line", Version))
 	return nil
 }
 
@@ -385,210 +386,21 @@ func New() *Cmd {
 	}
 
 	app.Action = func(c *cli.Context) error {
-		var options []server.OptionFn
-		if v := c.String("listener"); v != "" {
-			options = append(options, server.Listener(v))
-		}
+		options := []server.OptionFn{}
 
-		if v := c.String("cors-domains"); v != "" {
-			options = append(options, server.CorsDomains(v))
-		}
+		addBasicOptions(c, &options, logger)
+		addTLSOptions(c, &options)
 
-		if v := c.String("tls-listener"); v == "" {
-		} else if c.Bool("tls-listener-only") {
-			options = append(options, server.TLSListener(v, true))
-		} else {
-			options = append(options, server.TLSListener(v, false))
-		}
-
-		if v := c.String("profile-listener"); v != "" {
-			options = append(options, server.ProfileListener(v))
-		}
-
-		if v := c.String("web-path"); v != "" {
-			options = append(options, server.WebPath(v))
-		}
-
-		if v := c.String("proxy-path"); v != "" {
-			options = append(options, server.ProxyPath(v))
-		}
-
-		if v := c.String("proxy-port"); v != "" {
-			options = append(options, server.ProxyPort(v))
-		}
-
-		if v := c.String("email-contact"); v != "" {
-			options = append(options, server.EmailContact(v))
-		}
-
-		if v := c.String("ga-key"); v != "" {
-			options = append(options, server.GoogleAnalytics(v))
-		}
-
-		if v := c.String("uservoice-key"); v != "" {
-			options = append(options, server.UserVoice(v))
-		}
-
-		if v := c.String("temp-path"); v != "" {
-			options = append(options, server.TempPath(v))
-		}
-
-		if v := c.String("log"); v != "" {
-			options = append(options, server.LogFile(logger, v))
-		} else {
-			options = append(options, server.Logger(logger))
-		}
-
-		if v := c.String("lets-encrypt-hosts"); v != "" {
-			options = append(options, server.UseLetsEncrypt(strings.Split(v, ",")))
-		}
-
-		if v := c.String("virustotal-key"); v != "" {
-			options = append(options, server.VirustotalKey(v))
-		}
-
-		if v := c.String("clamav-host"); v != "" {
-			options = append(options, server.ClamavHost(v))
-		}
-
-		if v := c.Bool("perform-clamav-prescan"); v {
-			if c.String("clamav-host") == "" {
-				return errors.New("clamav-host not set")
-			}
-
-			options = append(options, server.PerformClamavPrescan(v))
-		}
-
-		if v := c.Int64("max-upload-size"); v > 0 {
-			options = append(options, server.MaxUploadSize(v))
-		}
-
-		if v := c.Int("rate-limit"); v > 0 {
-			options = append(options, server.RateLimit(v))
-		}
-
-		v := c.Int("random-token-length")
-		options = append(options, server.RandomTokenLength(v))
-
-		if v := c.String("compress-large"); v != "" {
-			bytes, err := parseSize(v)
-			if err != nil {
-				return err
-			}
-			options = append(options, server.CompressionThreshold(bytes))
+		if err := addSecurityOptions(c, &options); err != nil {
+			return err
 		}
 
 		purgeDays := c.Int("purge-days")
-		purgeInterval := c.Int("purge-interval")
-		if purgeDays > 0 && purgeInterval > 0 {
-			options = append(options, server.Purge(purgeDays, purgeInterval))
+		if err := addStorageProvider(c, &options, logger, purgeDays); err != nil {
+			return err
 		}
 
-		if cert := c.String("tls-cert-file"); cert == "" {
-		} else if pk := c.String("tls-private-key"); pk == "" {
-		} else {
-			options = append(options, server.TLSConfig(cert, pk))
-		}
-
-		if c.Bool("profiler") {
-			options = append(options, server.EnableProfiler())
-		}
-
-		if c.Bool("force-https") {
-			options = append(options, server.ForceHTTPS())
-		}
-
-		if httpAuthUser := c.String("http-auth-user"); httpAuthUser == "" {
-		} else if httpAuthPass := c.String("http-auth-pass"); httpAuthPass == "" {
-		} else {
-			options = append(options, server.HTTPAuthCredentials(httpAuthUser, httpAuthPass))
-		}
-
-		if httpAuthHtpasswd := c.String("http-auth-htpasswd"); httpAuthHtpasswd != "" {
-			options = append(options, server.HTTPAuthHtpasswd(httpAuthHtpasswd))
-		}
-
-		insecure := c.Bool("insecure")
-
-		if !insecure {
-			if httpAuthIPWhitelist := c.String("http-auth-ip-whitelist"); httpAuthIPWhitelist != "" {
-				ipFilterOptions := server.IPFilterOptions{}
-				ipFilterOptions.AllowedIPs = strings.Split(httpAuthIPWhitelist, ",")
-				ipFilterOptions.BlockByDefault = true
-				options = append(options, server.HTTPAUTHFilterOptions(ipFilterOptions))
-			}
-
-			applyIPFilter := false
-			ipFilterOptions := server.IPFilterOptions{}
-			if ipWhitelist := c.String("ip-whitelist"); ipWhitelist != "" {
-				applyIPFilter = true
-				ipFilterOptions.AllowedIPs = strings.Split(ipWhitelist, ",")
-				ipFilterOptions.BlockByDefault = true
-			}
-
-			if ipBlacklist := c.String("ip-blacklist"); ipBlacklist != "" {
-				applyIPFilter = true
-				ipFilterOptions.BlockedIPs = strings.Split(ipBlacklist, ",")
-			}
-
-			if applyIPFilter {
-				options = append(options, server.FilterOptions(ipFilterOptions))
-			}
-		}
-
-		switch provider := c.String("provider"); provider {
-		case "s3":
-			if accessKey := c.String("aws-access-key"); accessKey == "" {
-				return errors.New("access-key not set.")
-			} else if secretKey := c.String("aws-secret-key"); secretKey == "" {
-				return errors.New("secret-key not set.")
-			} else if bucket := c.String("bucket"); bucket == "" {
-				return errors.New("bucket not set.")
-			} else if store, err := storage.NewS3Storage(c.Context, accessKey, secretKey, bucket, purgeDays, c.String("s3-region"), c.String("s3-endpoint"), c.Bool("s3-no-multipart"), c.Bool("s3-path-style"), logger); err != nil {
-				return err
-			} else {
-				options = append(options, server.UseStorage(store))
-			}
-		case "gdrive":
-			chunkSize := c.Int("gdrive-chunk-size") * 1024 * 1024
-
-			if clientJSONFilepath := c.String("gdrive-client-json-filepath"); clientJSONFilepath == "" {
-				return errors.New("gdrive-client-json-filepath not set.")
-			} else if localConfigPath := c.String("gdrive-local-config-path"); localConfigPath == "" {
-				return errors.New("gdrive-local-config-path not set.")
-			} else if basedir := c.String("basedir"); basedir == "" {
-				return errors.New("basedir not set.")
-			} else if store, err := storage.NewGDriveStorage(c.Context, clientJSONFilepath, localConfigPath, basedir, chunkSize, logger); err != nil {
-				return err
-			} else {
-				options = append(options, server.UseStorage(store))
-			}
-		case "storj":
-			if access := c.String("storj-access"); access == "" {
-				return errors.New("storj-access not set.")
-			} else if bucket := c.String("storj-bucket"); bucket == "" {
-				return errors.New("storj-bucket not set.")
-			} else if store, err := storage.NewStorjStorage(c.Context, access, bucket, purgeDays, logger); err != nil {
-				return err
-			} else {
-				options = append(options, server.UseStorage(store))
-			}
-		case "local":
-			if v := c.String("basedir"); v == "" {
-				return errors.New("basedir not set.")
-			} else if store, err := storage.NewLocalStorage(v, logger); err != nil {
-				return err
-			} else {
-				options = append(options, server.UseStorage(store))
-			}
-		default:
-			return errors.New("Provider not set or invalid.")
-		}
-
-		srvr, err := server.New(
-			options...,
-		)
-
+		srvr, err := server.New(options...)
 		if err != nil {
 			logger.Println(color.RedString("Error starting server: %s", err.Error()))
 			return err
@@ -601,4 +413,237 @@ func New() *Cmd {
 	return &Cmd{
 		App: app,
 	}
+}
+
+func addBasicOptions(c *cli.Context, options *[]server.OptionFn, logger *log.Logger) {
+	addStringOption(c, options, "listener", server.Listener)
+	addStringOption(c, options, "cors-domains", server.CorsDomains)
+	addStringOption(c, options, "profile-listener", server.ProfileListener)
+	addStringOption(c, options, "web-path", server.WebPath)
+	addStringOption(c, options, "proxy-path", server.ProxyPath)
+	addStringOption(c, options, "proxy-port", server.ProxyPort)
+	addStringOption(c, options, "email-contact", server.EmailContact)
+	addStringOption(c, options, "ga-key", server.GoogleAnalytics)
+	addStringOption(c, options, "uservoice-key", server.UserVoice)
+	addStringOption(c, options, "temp-path", server.TempPath)
+	addStringOption(c, options, "lets-encrypt-hosts", func(v string) server.OptionFn {
+		return server.UseLetsEncrypt(strings.Split(v, ","))
+	})
+	addStringOption(c, options, "virustotal-key", server.VirustotalKey)
+	addStringOption(c, options, "clamav-host", server.ClamavHost)
+
+	if v := c.String("log"); v != "" {
+		*options = append(*options, server.LogFile(logger, v))
+	} else {
+		*options = append(*options, server.Logger(logger))
+	}
+
+	if c.Bool("perform-clamav-prescan") {
+		*options = append(*options, server.PerformClamavPrescan(true))
+	}
+
+	if v := c.Int64("max-upload-size"); v > 0 {
+		*options = append(*options, server.MaxUploadSize(v))
+	}
+
+	if v := c.Int("rate-limit"); v > 0 {
+		*options = append(*options, server.RateLimit(v))
+	}
+
+	*options = append(*options, server.RandomTokenLength(c.Int("random-token-length")))
+
+	if v := c.String("compress-large"); v != "" {
+		if bytes, err := parseSize(v); err == nil {
+			*options = append(*options, server.CompressionThreshold(bytes))
+		}
+	}
+}
+
+func addStringOption(c *cli.Context, options *[]server.OptionFn, flag string, fn func(string) server.OptionFn) {
+	if v := c.String(flag); v != "" {
+		*options = append(*options, fn(v))
+	}
+}
+
+func addTLSOptions(c *cli.Context, options *[]server.OptionFn) {
+	if v := c.String("tls-listener"); v != "" {
+		tlsOnly := c.Bool("tls-listener-only")
+		*options = append(*options, server.TLSListener(v, tlsOnly))
+	}
+
+	if cert := c.String("tls-cert-file"); cert != "" {
+		if pk := c.String("tls-private-key"); pk != "" {
+			*options = append(*options, server.TLSConfig(cert, pk))
+		}
+	}
+
+	if c.Bool("profiler") {
+		*options = append(*options, server.EnableProfiler())
+	}
+
+	if c.Bool("force-https") {
+		*options = append(*options, server.ForceHTTPS())
+	}
+}
+
+func addSecurityOptions(c *cli.Context, options *[]server.OptionFn) error {
+	purgeDays := c.Int("purge-days")
+	purgeInterval := c.Int("purge-interval")
+	if purgeDays > 0 && purgeInterval > 0 {
+		*options = append(*options, server.Purge(purgeDays, purgeInterval))
+	}
+
+	if httpAuthUser := c.String("http-auth-user"); httpAuthUser != "" {
+		if httpAuthPass := c.String("http-auth-pass"); httpAuthPass != "" {
+			*options = append(*options, server.HTTPAuthCredentials(httpAuthUser, httpAuthPass))
+		}
+	}
+
+	if httpAuthHtpasswd := c.String("http-auth-htpasswd"); httpAuthHtpasswd != "" {
+		*options = append(*options, server.HTTPAuthHtpasswd(httpAuthHtpasswd))
+	}
+
+	if !c.Bool("insecure") {
+		if err := addIPFilterOptions(c, options); err != nil {
+			return err
+		}
+	}
+
+	if c.Bool("perform-clamav-prescan") && c.String("clamav-host") == "" {
+		return errors.New("clamav-host not set")
+	}
+
+	return nil
+}
+
+func addIPFilterOptions(c *cli.Context, options *[]server.OptionFn) error {
+	if httpAuthIPWhitelist := c.String("http-auth-ip-whitelist"); httpAuthIPWhitelist != "" {
+		ipFilterOptions := server.IPFilterOptions{
+			AllowedIPs:     strings.Split(httpAuthIPWhitelist, ","),
+			BlockByDefault: true,
+		}
+		*options = append(*options, server.HTTPAUTHFilterOptions(ipFilterOptions))
+	}
+
+	applyIPFilter := false
+	ipFilterOptions := server.IPFilterOptions{}
+	if ipWhitelist := c.String("ip-whitelist"); ipWhitelist != "" {
+		applyIPFilter = true
+		ipFilterOptions.AllowedIPs = strings.Split(ipWhitelist, ",")
+		ipFilterOptions.BlockByDefault = true
+	}
+
+	if ipBlacklist := c.String("ip-blacklist"); ipBlacklist != "" {
+		applyIPFilter = true
+		ipFilterOptions.BlockedIPs = strings.Split(ipBlacklist, ",")
+	}
+
+	if applyIPFilter {
+		*options = append(*options, server.FilterOptions(ipFilterOptions))
+	}
+
+	return nil
+}
+
+func addStorageProvider(c *cli.Context, options *[]server.OptionFn, logger *log.Logger, purgeDays int) error {
+	provider := c.String("provider")
+
+	switch provider {
+	case "s3":
+		return addS3Storage(c, options, logger, purgeDays)
+	case "gdrive":
+		return addGDriveStorage(c, options, logger)
+	case "storj":
+		return addStorjStorage(c, options, logger, purgeDays)
+	case "local":
+		return addLocalStorage(c, options, logger)
+	default:
+		return errors.New("Provider not set or invalid.")
+	}
+}
+
+func addS3Storage(c *cli.Context, options *[]server.OptionFn, logger *log.Logger, purgeDays int) error {
+	accessKey := c.String("aws-access-key")
+	secretKey := c.String("aws-secret-key")
+	bucket := c.String("bucket")
+
+	if accessKey == "" {
+		return errors.New("access-key not set.")
+	}
+	if secretKey == "" {
+		return errors.New("secret-key not set.")
+	}
+	if bucket == "" {
+		return errors.New("bucket not set.")
+	}
+
+	store, err := storage.NewS3Storage(c.Context, accessKey, secretKey, bucket, purgeDays,
+		c.String("s3-region"), c.String("s3-endpoint"),
+		c.Bool("s3-no-multipart"), c.Bool("s3-path-style"), logger)
+	if err != nil {
+		return err
+	}
+
+	*options = append(*options, server.UseStorage(store))
+	return nil
+}
+
+func addGDriveStorage(c *cli.Context, options *[]server.OptionFn, logger *log.Logger) error {
+	chunkSize := c.Int("gdrive-chunk-size") * 1024 * 1024
+	clientJSONFilepath := c.String("gdrive-client-json-filepath")
+	localConfigPath := c.String("gdrive-local-config-path")
+	basedir := c.String("basedir")
+
+	if clientJSONFilepath == "" {
+		return errors.New("gdrive-client-json-filepath not set.")
+	}
+	if localConfigPath == "" {
+		return errors.New("gdrive-local-config-path not set.")
+	}
+	if basedir == "" {
+		return errors.New("basedir not set.")
+	}
+
+	store, err := storage.NewGDriveStorage(c.Context, clientJSONFilepath, localConfigPath, basedir, chunkSize, logger)
+	if err != nil {
+		return err
+	}
+
+	*options = append(*options, server.UseStorage(store))
+	return nil
+}
+
+func addStorjStorage(c *cli.Context, options *[]server.OptionFn, logger *log.Logger, purgeDays int) error {
+	access := c.String("storj-access")
+	bucket := c.String("storj-bucket")
+
+	if access == "" {
+		return errors.New("storj-access not set.")
+	}
+	if bucket == "" {
+		return errors.New("storj-bucket not set.")
+	}
+
+	store, err := storage.NewStorjStorage(c.Context, access, bucket, purgeDays, logger)
+	if err != nil {
+		return err
+	}
+
+	*options = append(*options, server.UseStorage(store))
+	return nil
+}
+
+func addLocalStorage(c *cli.Context, options *[]server.OptionFn, logger *log.Logger) error {
+	basedir := c.String("basedir")
+	if basedir == "" {
+		return errors.New("basedir not set.")
+	}
+
+	store, err := storage.NewLocalStorage(basedir, logger)
+	if err != nil {
+		return err
+	}
+
+	*options = append(*options, server.UseStorage(store))
+	return nil
 }

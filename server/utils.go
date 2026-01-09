@@ -1,4 +1,3 @@
-
 package server
 
 import (
@@ -43,10 +42,41 @@ var renderFloatPrecisionRounders = [10]float64{
 }
 
 func renderFloat(format string, n float64) string {
-	// Special cases:
-	// NaN = "NaN"
-	// +Inf = "+Infinity"
-	// -Inf = "-Infinity"
+	// Handle special cases
+	if special := handleSpecialCases(n); special != "" {
+		return special
+	}
+
+	// Parse format and get formatting parameters
+	precision, decimalStr, thousandStr, positiveStr, negativeStr := parseFormatString(format)
+
+	// Generate sign part
+	signStr, n := generateSignPart(n, positiveStr, negativeStr)
+
+	// Split number and generate integer/fractional parts
+	intf, fracf := math.Modf(n + renderFloatPrecisionRounders[precision])
+	intStr := strconv.Itoa(int(intf))
+
+	// Add thousand separator if required
+	if len(thousandStr) > 0 {
+		intStr = addThousandSeparator(intStr, thousandStr)
+	}
+
+	// No fractional part, return early
+	if precision == 0 {
+		return signStr + intStr
+	}
+
+	// Generate fractional part with padding
+	fracStr := strconv.Itoa(int(fracf * renderFloatPrecisionMultipliers[precision]))
+	if len(fracStr) < precision {
+		fracStr = "000000000000000"[:precision-len(fracStr)] + fracStr
+	}
+
+	return signStr + intStr + decimalStr + fracStr
+}
+
+func handleSpecialCases(n float64) string {
 	if math.IsNaN(n) {
 		return "NaN"
 	}
@@ -56,98 +86,74 @@ func renderFloat(format string, n float64) string {
 	if n < -math.MaxFloat64 {
 		return "-Infinity"
 	}
+	return ""
+}
 
-	// default format
-	precision := 2
-	decimalStr := "."
-	thousandStr := ","
-	positiveStr := ""
-	negativeStr := "-"
+func parseFormatString(format string) (precision int, decimalStr, thousandStr, positiveStr, negativeStr string) {
+	precision = 2
+	decimalStr = "."
+	thousandStr = ","
+	positiveStr = ""
+	negativeStr = "-"
 
-	if len(format) > 0 {
-		// If there is an explicit format directive,
-		// then default values are these:
-		precision = 9
-		thousandStr = ""
+	if len(format) == 0 {
+		return
+	}
 
-		// collect indices of meaningful formatting directives
-		formatDirectiveChars := []rune(format)
-		formatDirectiveIndices := make([]int, 0)
-		for i, char := range formatDirectiveChars {
-			if char != '#' && char != '0' {
-				formatDirectiveIndices = append(formatDirectiveIndices, i)
-			}
-		}
+	precision = 9
+	thousandStr = ""
 
-		if len(formatDirectiveIndices) > 0 {
-			if formatDirectiveIndices[0] == 0 {
-				if formatDirectiveChars[formatDirectiveIndices[0]] != '+' {
-					return "NaN"
-				}
-				positiveStr = "+"
-				formatDirectiveIndices = formatDirectiveIndices[1:]
-			}
-
-			if len(formatDirectiveIndices) == 2 {
-				if (formatDirectiveIndices[1] - formatDirectiveIndices[0]) != 4 {
-					return "NaN"
-				}
-				thousandStr = string(formatDirectiveChars[formatDirectiveIndices[0]])
-				formatDirectiveIndices = formatDirectiveIndices[1:]
-			}
-
-			// One directive:
-			// Directive is decimal separator
-			// The number of digit-specifier following the separator indicates wanted precision
-			// 0123456789
-			// 0.00
-			// 000,0000
-			if len(formatDirectiveIndices) == 1 {
-				decimalStr = string(formatDirectiveChars[formatDirectiveIndices[0]])
-				precision = len(formatDirectiveChars) - formatDirectiveIndices[0] - 1
-			}
+	formatDirectiveChars := []rune(format)
+	formatDirectiveIndices := make([]int, 0)
+	for i, char := range formatDirectiveChars {
+		if char != '#' && char != '0' {
+			formatDirectiveIndices = append(formatDirectiveIndices, i)
 		}
 	}
 
-	// generate sign part
-	var signStr string
+	if len(formatDirectiveIndices) == 0 {
+		return
+	}
+
+	if formatDirectiveIndices[0] == 0 {
+		if formatDirectiveChars[formatDirectiveIndices[0]] != '+' {
+			return
+		}
+		positiveStr = "+"
+		formatDirectiveIndices = formatDirectiveIndices[1:]
+	}
+
+	if len(formatDirectiveIndices) >= 2 {
+		if (formatDirectiveIndices[1] - formatDirectiveIndices[0]) == 4 {
+			thousandStr = string(formatDirectiveChars[formatDirectiveIndices[0]])
+			formatDirectiveIndices = formatDirectiveIndices[1:]
+		}
+	}
+
+	if len(formatDirectiveIndices) == 1 {
+		decimalStr = string(formatDirectiveChars[formatDirectiveIndices[0]])
+		precision = len(formatDirectiveChars) - formatDirectiveIndices[0] - 1
+	}
+
+	return
+}
+
+func generateSignPart(n float64, positiveStr, negativeStr string) (string, float64) {
 	if n >= 0.000000001 {
-		signStr = positiveStr
-	} else if n <= -0.000000001 {
-		signStr = negativeStr
-		n = -n
-	} else {
-		signStr = ""
-		n = 0.0
+		return positiveStr, n
 	}
-
-	// split number into integer and fractional parts
-	intf, fracf := math.Modf(n + renderFloatPrecisionRounders[precision])
-
-	// generate integer part string
-	intStr := strconv.Itoa(int(intf))
-
-	// add thousand separator if required
-	if len(thousandStr) > 0 {
-		for i := len(intStr); i > 3; {
-			i -= 3
-			intStr = intStr[:i] + thousandStr + intStr[i:]
-		}
+	if n <= -0.000000001 {
+		return negativeStr, -n
 	}
+	return "", 0.0
+}
 
-	// no fractional part, we can leave now
-	if precision == 0 {
-		return signStr + intStr
+func addThousandSeparator(intStr, thousandStr string) string {
+	for i := len(intStr); i > 3; {
+		i -= 3
+		intStr = intStr[:i] + thousandStr + intStr[i:]
 	}
-
-	// generate fractional part
-	fracStr := strconv.Itoa(int(fracf * renderFloatPrecisionMultipliers[precision]))
-	// may need padding
-	if len(fracStr) < precision {
-		fracStr = "000000000000000"[:precision-len(fracStr)] + fracStr
-	}
-
-	return signStr + intStr + decimalStr + fracStr
+	return intStr
 }
 
 // Request.RemoteAddress contains port, which we want to remove i.e.:
