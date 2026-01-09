@@ -1,4 +1,3 @@
-
 package server
 
 import (
@@ -28,9 +27,9 @@ import (
 	"github.com/tg123/go-htpasswd"
 	"golang.org/x/crypto/acme/autocert"
 
-	web "github.com/morawskidotmy/transfer.ng/web"
-	"github.com/morawskidotmy/transfer.ng/server/storage"
 	assetfs "github.com/elazarl/go-bindata-assetfs"
+	"github.com/morawskidotmy/transfer.ng/server/storage"
+	web "github.com/morawskidotmy/transfer.ng/web"
 )
 
 // parse request with maximum memory of _24Kilobits
@@ -323,9 +322,9 @@ type Server struct {
 	authHtpasswd        string
 	authIPFilterOptions *IPFilterOptions
 
-	htpasswdFile      *htpasswd.File
-	authIPFilter      *ipFilter
-	authInitMutex     sync.Mutex
+	htpasswdFile  *htpasswd.File
+	authIPFilter  *ipFilter
+	authInitMutex sync.Mutex
 
 	logger  *log.Logger
 	logFile *os.File
@@ -397,136 +396,34 @@ func New(options ...OptionFn) (*Server, error) {
 	return s, nil
 }
 
-
-
 // Run starts Server
 func (s *Server) Run() {
 	listening := false
 
 	if s.profilerEnabled {
 		listening = true
-
 		go func() {
 			s.logger.Println("Profiled listening at: :6060")
-
 			_ = http.ListenAndServe(":6060", nil)
 		}()
 	}
 
 	r := mux.NewRouter()
-
 	s.htmlTemplates = initHTMLTemplates()
 	s.textTemplates = initTextTemplates()
 
 	var fs http.FileSystem
-
 	if s.webPath != "" {
 		s.logger.Println("Using static file path: ", s.webPath)
-
 		fs = http.Dir(s.webPath)
-
-		s.htmlTemplatesMutex.Lock()
-		s.htmlTemplates, _ = s.htmlTemplates.ParseGlob(filepath.Join(s.webPath, "*.html"))
-		s.htmlTemplatesMutex.Unlock()
-		s.textTemplatesMutex.Lock()
-		s.textTemplates, _ = s.textTemplates.ParseGlob(filepath.Join(s.webPath, "*.txt"))
-		s.textTemplatesMutex.Unlock()
+		s.loadTemplatesFromPath()
 	} else {
-		fs = &assetfs.AssetFS{
-			Asset:    web.Asset,
-			AssetDir: web.AssetDir,
-			AssetInfo: func(path string) (os.FileInfo, error) {
-				return os.Stat(path)
-			},
-			Prefix: web.Prefix,
-		}
-
-		for _, path := range web.AssetNames() {
-			bytes, err := web.Asset(path)
-			if err != nil {
-				s.logger.Fatalf("Unable to parse: path=%s, err=%s", path, err)
-			}
-
-			if strings.HasSuffix(path, ".html") {
-				s.htmlTemplatesMutex.Lock()
-				_, err = s.htmlTemplates.New(stripPrefix(path)).Parse(string(bytes))
-				s.htmlTemplatesMutex.Unlock()
-				if err != nil {
-					s.logger.Println("Unable to parse html template", err)
-				}
-			}
-			if strings.HasSuffix(path, ".txt") {
-				s.textTemplatesMutex.Lock()
-				_, err = s.textTemplates.New(stripPrefix(path)).Parse(string(bytes))
-				s.textTemplatesMutex.Unlock()
-				if err != nil {
-					s.logger.Println("Unable to parse text template", err)
-				}
-			}
-		}
+		fs = s.createAssetFS()
+		s.loadTemplatesFromAssets()
 	}
 
 	staticHandler := http.FileServer(fs)
-
-	r.PathPrefix("/images/").Handler(staticHandler).Methods("GET")
-	r.PathPrefix("/styles/").Handler(staticHandler).Methods("GET")
-	r.PathPrefix("/scripts/").Handler(staticHandler).Methods("GET")
-	r.PathPrefix("/fonts/").Handler(staticHandler).Methods("GET")
-	r.PathPrefix("/ico/").Handler(staticHandler).Methods("GET")
-	r.HandleFunc("/favicon.ico", staticHandler.ServeHTTP).Methods("GET")
-	r.HandleFunc("/robots.txt", staticHandler.ServeHTTP).Methods("GET")
-
-	r.HandleFunc("/{filename:(?:favicon\\.ico|robots\\.txt|health\\.html)}", s.basicAuthHandler(http.HandlerFunc(s.putHandler))).Methods("PUT")
-
-	r.HandleFunc("/health.html", healthHandler).Methods("GET")
-	r.HandleFunc("/", s.viewHandler).Methods("GET")
-
-	r.HandleFunc("/({files:.*}).zip", s.zipHandler).Methods("GET")
-	r.HandleFunc("/({files:.*}).tar", s.tarHandler).Methods("GET")
-	r.HandleFunc("/({files:.*}).tar.gz", s.tarGzHandler).Methods("GET")
-
-	r.HandleFunc("/{token}/{filename}", s.headHandler).Methods("HEAD")
-	r.HandleFunc("/{action:(?:download|get|inline)}/{token}/{filename}", s.headHandler).Methods("HEAD")
-
-	r.HandleFunc("/{token}/{filename}", s.previewHandler).MatcherFunc(func(r *http.Request, rm *mux.RouteMatch) (match bool) {
-		// The file will show a preview page when opening the link in browser directly or
-		// from external link. If the referer url path and current path are the same it will be
-		// downloaded.
-		if !acceptsHTML(r.Header) {
-			return false
-		}
-
-		match = r.Referer() == ""
-
-		u, err := url.Parse(r.Referer())
-		if err != nil {
-			s.logger.Fatal(err)
-			return
-		}
-
-		match = match || (u.Path != r.URL.Path)
-		return
-	}).Methods("GET")
-
-	getHandlerFn := s.getHandler
-	if s.rateLimitRequests > 0 {
-		getHandlerFn = ratelimit.Request(ratelimit.IP).Rate(s.rateLimitRequests, 60*time.Second).LimitBy(memory.New())(http.HandlerFunc(getHandlerFn)).ServeHTTP
-	}
-
-	r.HandleFunc("/{token}/{filename}", getHandlerFn).Methods("GET")
-	r.HandleFunc("/{action:(?:download|get|inline)}/{token}/{filename}", getHandlerFn).Methods("GET")
-
-	r.HandleFunc("/{filename}/virustotal", s.virusTotalHandler).Methods("PUT")
-	r.HandleFunc("/{filename}/scan", s.scanHandler).Methods("PUT")
-	r.HandleFunc("/put/{filename}", s.basicAuthHandler(http.HandlerFunc(s.putHandler))).Methods("PUT")
-	r.HandleFunc("/upload/{filename}", s.basicAuthHandler(http.HandlerFunc(s.putHandler))).Methods("PUT")
-	r.HandleFunc("/{filename}", s.basicAuthHandler(http.HandlerFunc(s.putHandler))).Methods("PUT")
-	r.HandleFunc("/", s.basicAuthHandler(http.HandlerFunc(s.postHandler))).Methods("POST")
-	// r.HandleFunc("/{page}", viewHandler).Methods("GET")
-
-	r.HandleFunc("/{token}/{filename}/{deletionToken}", s.deleteHandler).Methods("DELETE")
-
-	r.NotFoundHandler = http.HandlerFunc(s.notFoundHandler)
+	s.setupRoutes(r, staticHandler)
 
 	_ = mime.AddExtensionType(".md", "text/x-markdown")
 	_ = mime.AddExtensionType(".markdown", "text/x-markdown")
@@ -861,10 +758,106 @@ func (s *Server) Run() {
 	}
 
 	s.purgeCancel()
-	
+
 	if s.logFile != nil {
 		s.logFile.Close()
 	}
 
 	s.logger.Printf("Server stopped.")
+}
+
+func (s *Server) loadTemplatesFromPath() {
+	s.htmlTemplatesMutex.Lock()
+	s.htmlTemplates, _ = s.htmlTemplates.ParseGlob(filepath.Join(s.webPath, "*.html"))
+	s.htmlTemplatesMutex.Unlock()
+	s.textTemplatesMutex.Lock()
+	s.textTemplates, _ = s.textTemplates.ParseGlob(filepath.Join(s.webPath, "*.txt"))
+	s.textTemplatesMutex.Unlock()
+}
+
+func (s *Server) createAssetFS() http.FileSystem {
+	return &assetfs.AssetFS{
+		Asset:    web.Asset,
+		AssetDir: web.AssetDir,
+		AssetInfo: func(path string) (os.FileInfo, error) {
+			return os.Stat(path)
+		},
+		Prefix: web.Prefix,
+	}
+}
+
+func (s *Server) loadTemplatesFromAssets() {
+	for _, path := range web.AssetNames() {
+		bytes, err := web.Asset(path)
+		if err != nil {
+			s.logger.Fatalf("Unable to parse: path=%s, err=%s", path, err)
+		}
+
+		if strings.HasSuffix(path, ".html") {
+			s.htmlTemplatesMutex.Lock()
+			_, err = s.htmlTemplates.New(stripPrefix(path)).Parse(string(bytes))
+			s.htmlTemplatesMutex.Unlock()
+			if err != nil {
+				s.logger.Println("Unable to parse html template", err)
+			}
+		}
+		if strings.HasSuffix(path, ".txt") {
+			s.textTemplatesMutex.Lock()
+			_, err = s.textTemplates.New(stripPrefix(path)).Parse(string(bytes))
+			s.textTemplatesMutex.Unlock()
+			if err != nil {
+				s.logger.Println("Unable to parse text template", err)
+			}
+		}
+	}
+}
+
+func (s *Server) setupRoutes(r *mux.Router, staticHandler http.Handler) {
+	r.PathPrefix("/images/").Handler(staticHandler).Methods("GET")
+	r.PathPrefix("/styles/").Handler(staticHandler).Methods("GET")
+	r.PathPrefix("/scripts/").Handler(staticHandler).Methods("GET")
+	r.PathPrefix("/fonts/").Handler(staticHandler).Methods("GET")
+	r.PathPrefix("/ico/").Handler(staticHandler).Methods("GET")
+	r.HandleFunc("/favicon.ico", staticHandler.ServeHTTP).Methods("GET")
+	r.HandleFunc("/robots.txt", staticHandler.ServeHTTP).Methods("GET")
+	r.HandleFunc("/{filename:(?:favicon\\.ico|robots\\.txt|health\\.html)}", s.basicAuthHandler(http.HandlerFunc(s.putHandler))).Methods("PUT")
+	r.HandleFunc("/health.html", healthHandler).Methods("GET")
+	r.HandleFunc("/", s.viewHandler).Methods("GET")
+	r.HandleFunc("/({files:.*}).zip", s.zipHandler).Methods("GET")
+	r.HandleFunc("/({files:.*}).tar", s.tarHandler).Methods("GET")
+	r.HandleFunc("/({files:.*}).tar.gz", s.tarGzHandler).Methods("GET")
+	r.HandleFunc("/{token}/{filename}", s.headHandler).Methods("HEAD")
+	r.HandleFunc("/{action:(?:download|get|inline)}/{token}/{filename}", s.headHandler).Methods("HEAD")
+	r.HandleFunc("/{token}/{filename}", s.previewHandler).MatcherFunc(s.previewMatcher).Methods("GET")
+
+	getHandlerFn := s.getHandler
+	if s.rateLimitRequests > 0 {
+		getHandlerFn = ratelimit.Request(ratelimit.IP).Rate(s.rateLimitRequests, 60*time.Second).LimitBy(memory.New())(http.HandlerFunc(getHandlerFn)).ServeHTTP
+	}
+
+	r.HandleFunc("/{token}/{filename}", getHandlerFn).Methods("GET")
+	r.HandleFunc("/{action:(?:download|get|inline)}/{token}/{filename}", getHandlerFn).Methods("GET")
+	r.HandleFunc("/{filename}/virustotal", s.virusTotalHandler).Methods("PUT")
+	r.HandleFunc("/{filename}/scan", s.scanHandler).Methods("PUT")
+	r.HandleFunc("/put/{filename}", s.basicAuthHandler(http.HandlerFunc(s.putHandler))).Methods("PUT")
+	r.HandleFunc("/upload/{filename}", s.basicAuthHandler(http.HandlerFunc(s.putHandler))).Methods("PUT")
+	r.HandleFunc("/{filename}", s.basicAuthHandler(http.HandlerFunc(s.putHandler))).Methods("PUT")
+	r.HandleFunc("/", s.basicAuthHandler(http.HandlerFunc(s.postHandler))).Methods("POST")
+	r.HandleFunc("/{token}/{filename}/{deletionToken}", s.deleteHandler).Methods("DELETE")
+	r.NotFoundHandler = http.HandlerFunc(s.notFoundHandler)
+}
+
+func (s *Server) previewMatcher(r *http.Request, rm *mux.RouteMatch) bool {
+	if !acceptsHTML(r.Header) {
+		return false
+	}
+	if r.Referer() == "" {
+		return true
+	}
+	u, err := url.Parse(r.Referer())
+	if err != nil {
+		s.logger.Fatal(err)
+		return false
+	}
+	return u.Path != r.URL.Path
 }

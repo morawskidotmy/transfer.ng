@@ -15,7 +15,7 @@ type suiteUtils struct{}
 func (s *suiteUtils) TestFormatNumber(c *C) {
 	result := formatNumber("", uint64(1024))
 	c.Assert(result, Equals, "1,024.00")
-	
+
 	result = formatNumber("", uint64(1048576))
 	c.Assert(result, Equals, "1,048,576.00")
 }
