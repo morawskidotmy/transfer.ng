@@ -350,6 +350,8 @@ func (s *Server) viewHandler(w http.ResponseWriter, r *http.Request) {
 		purgeTime = formatDurationDays(s.purgeDays)
 	}
 
+	tokenA, _ := token(s.randomTokenLength)
+	tokenB, _ := token(s.randomTokenLength)
 	data := struct {
 		Hostname      string
 		WebAddress    string
@@ -368,8 +370,8 @@ func (s *Server) viewHandler(w http.ResponseWriter, r *http.Request) {
 		s.userVoiceKey,
 		purgeTime,
 		maxUploadSize,
-		token(s.randomTokenLength),
-		token(s.randomTokenLength),
+		tokenA,
+		tokenB,
 	}
 
 	w.Header().Set("Vary", "Accept")
@@ -424,7 +426,12 @@ func (s *Server) postHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token := token(s.randomTokenLength)
+	uploadToken, tokenErr := token(s.randomTokenLength)
+	if tokenErr != nil {
+		s.logger.Printf("%s", tokenErr.Error())
+		http.Error(w, "Error occurred generating token", http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "text/plain")
 
@@ -497,14 +504,14 @@ func (s *Server) postHandler(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "Could not encode metadata", http.StatusInternalServerError)
 
 				return
-			} else if err := s.storage.Put(r.Context(), token, fmt.Sprintf("%s.metadata", filename), buffer, "text/json", uint64(buffer.Len())); err != nil {
+			} else if err := s.storage.Put(r.Context(), uploadToken, fmt.Sprintf("%s.metadata", filename), buffer, "text/json", uint64(buffer.Len())); err != nil {
 				s.logger.Printf("%s", err.Error())
 				http.Error(w, "Could not save metadata", http.StatusInternalServerError)
 
 				return
 			}
 
-			s.logger.Printf("Uploading %s %s %d %s", token, filename, contentLength, contentType)
+			s.logger.Printf("Uploading %s %s %d %s", uploadToken, filename, contentLength, contentType)
 
 			reader, err := attachEncryptionReader(file, r.Header.Get("X-Encrypt-Password"))
 			if err != nil {
@@ -512,7 +519,7 @@ func (s *Server) postHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			if err = s.storage.Put(r.Context(), token, filename, reader, contentType, uint64(contentLength)); err != nil {
+			if err = s.storage.Put(r.Context(), uploadToken, filename, reader, contentType, uint64(contentLength)); err != nil {
 				s.logger.Printf("Backend storage error: %s", err.Error())
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -520,8 +527,8 @@ func (s *Server) postHandler(w http.ResponseWriter, r *http.Request) {
 			}
 
 			filename = url.PathEscape(filename)
-			relativeURL, _ := url.Parse(path.Join(s.proxyPath, token, filename))
-			deleteURL, _ := url.Parse(path.Join(s.proxyPath, token, filename, metadata.DeletionToken))
+			relativeURL, _ := url.Parse(path.Join(s.proxyPath, uploadToken, filename))
+			deleteURL, _ := url.Parse(path.Join(s.proxyPath, uploadToken, filename, metadata.DeletionToken))
 			w.Header().Add("X-Url-Delete", resolveURL(r, deleteURL, s.proxyPort))
 			responseBody.WriteString(getURL(r, s.proxyPort).ResolveReference(relativeURL).String())
 			responseBody.WriteString("\n")
@@ -568,13 +575,15 @@ type metadata struct {
 }
 
 func metadataForRequest(contentType string, contentLength int64, randomTokenLength int, r *http.Request) metadata {
+	delToken1, _ := token(randomTokenLength)
+	delToken2, _ := token(randomTokenLength)
 	metadata := metadata{
 		ContentType:   strings.ToLower(contentType),
 		ContentLength: contentLength,
 		MaxDate:       time.Time{},
 		Downloads:     0,
 		MaxDownloads:  -1,
-		DeletionToken: token(randomTokenLength) + token(randomTokenLength),
+		DeletionToken: delToken1 + delToken2,
 	}
 
 	if v := r.Header.Get("Max-Downloads"); v == "" {
@@ -672,7 +681,12 @@ func (s *Server) putHandler(w http.ResponseWriter, r *http.Request) {
 
 	contentType := mime.TypeByExtension(filepath.Ext(vars["filename"]))
 
-	token := token(s.randomTokenLength)
+	putToken, tokenErr := token(s.randomTokenLength)
+	if tokenErr != nil {
+		s.logger.Printf("%s", tokenErr.Error())
+		http.Error(w, "Error occurred generating token", http.StatusInternalServerError)
+		return
+	}
 
 	metadata := metadataForRequest(contentType, contentLength, s.randomTokenLength, r)
 
@@ -685,13 +699,13 @@ func (s *Server) putHandler(w http.ResponseWriter, r *http.Request) {
 		s.logger.Print("Invalid MaxDate")
 		http.Error(w, "Invalid MaxDate, make sure Max-Days is smaller than 290 years", http.StatusBadRequest)
 		return
-	} else if err := s.storage.Put(r.Context(), token, fmt.Sprintf("%s.metadata", filename), buffer, "text/json", uint64(buffer.Len())); err != nil {
+	} else if err := s.storage.Put(r.Context(), putToken, fmt.Sprintf("%s.metadata", filename), buffer, "text/json", uint64(buffer.Len())); err != nil {
 		s.logger.Printf("%s", err.Error())
 		http.Error(w, "Could not save metadata", http.StatusInternalServerError)
 		return
 	}
 
-	s.logger.Printf("Uploading %s %s %d %s", token, filename, contentLength, contentType)
+	s.logger.Printf("Uploading %s %s %d %s", putToken, filename, contentLength, contentType)
 
 	reader, err := attachEncryptionReader(reader, r.Header.Get("X-Encrypt-Password"))
 	if err != nil {
@@ -699,19 +713,17 @@ func (s *Server) putHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = s.storage.Put(r.Context(), token, filename, reader, contentType, uint64(contentLength)); err != nil {
+	if err = s.storage.Put(r.Context(), putToken, filename, reader, contentType, uint64(contentLength)); err != nil {
 		s.logger.Printf("Error putting new file: %s", err.Error())
 		http.Error(w, "Could not save file", http.StatusInternalServerError)
 		return
 	}
 
-	// w.Statuscode = 200
-
 	w.Header().Set("Content-Type", "text/plain")
 
 	filename = url.PathEscape(filename)
-	relativeURL, _ := url.Parse(path.Join(s.proxyPath, token, filename))
-	deleteURL, _ := url.Parse(path.Join(s.proxyPath, token, filename, metadata.DeletionToken))
+	relativeURL, _ := url.Parse(path.Join(s.proxyPath, putToken, filename))
+	deleteURL, _ := url.Parse(path.Join(s.proxyPath, putToken, filename, metadata.DeletionToken))
 
 	w.Header().Set("X-Url-Delete", resolveURL(r, deleteURL, s.proxyPort))
 
@@ -863,9 +875,6 @@ func (s *Server) checkMetadata(ctx context.Context, token, filename string, incr
 	} else if !metadata.MaxDate.IsZero() && time.Now().After(metadata.MaxDate) {
 		return metadata, errors.New("maxDate expired")
 	} else if metadata.MaxDownloads != -1 && increaseDownload {
-		// todo(nl5887): mutex?
-
-		// update number of downloads
 		metadata.Downloads++
 
 		buffer := &bytes.Buffer{}
