@@ -1,26 +1,8 @@
-# transfer.sh [![Go Report Card](https://goreportcard.com/badge/github.com/dutchcoders/transfer.sh)](https://goreportcard.com/report/github.com/dutchcoders/transfer.sh) [![Docker pulls](https://img.shields.io/docker/pulls/dutchcoders/transfer.sh.svg)](https://hub.docker.com/r/dutchcoders/transfer.sh/) [![Build Status](https://github.com/dutchcoders/transfer.sh/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/dutchcoders/transfer.sh/actions/workflows/test.yml?query=branch%3Amain)
+# transfer.ng [![Go Report Card](https://goreportcard.com/badge/github.com/morawskidotmy/transfer.ng)](https://goreportcard.com/report/github.com/morawskidotmy/transfer.ng) [![Build Status](https://github.com/morawskidotmy/transfer.ng/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/morawskidotmy/transfer.ng/actions/workflows/test.yml?query=branch%3Amain)
 
 Easy and fast file sharing from the command-line. This code contains the server with everything you need to create your own instance.
 
-Transfer.sh currently supports the s3 (Amazon S3), gdrive (Google Drive), storj (Storj) providers, and local file system (local).
-
-This transfer.ng fork includes +259 additional file extensions for improved type recognition.
-
-<br />
-
----
-
-<br />
-
-## Disclaimer
-
-@stefanbenten happens to be a maintainer of this repository _and_ the person who host a well known public installation of the software in the repo.
-
-The two are anyway unrelated, and the repo is not the place to direct requests and issues for any of the pubblic installation.
-
-No third-party public installation of the software in the repo will be advertised or mentioned in the repo itself, for security reasons.
-
-The official position of me, @aspacca, as maintainer of the repo, is that if you want to use the software you should host your own installation.
+transfer.ng supports the s3 (Amazon S3), gdrive (Google Drive), storj (Storj) providers, and local file system (local).
 
 <br />
 
@@ -30,14 +12,14 @@ The official position of me, @aspacca, as maintainer of the repo, is that if you
 
 ## Usage
 
-This section outlines how to use transfer.sh
+This section outlines how to use transfer.ng
 
 <br />
 
 ### Upload
 
 ```bash
-$ curl -v --upload-file ./hello.txt https://transfer.sh/hello.txt
+$ curl -v --upload-file ./hello.txt https://transferng.example.com/hello.txt
 ```
 
 <br />
@@ -45,7 +27,7 @@ $ curl -v --upload-file ./hello.txt https://transfer.sh/hello.txt
 ### Encrypt & Upload
 
 ```bash
-$ gpg --armor --symmetric --output - /tmp/hello.txt | curl --upload-file - https://transfer.sh/test.txt
+$ gpg --armor --symmetric --output - /tmp/hello.txt | curl --upload-file - https://transferng.example.com/test.txt
 ```
 
 <br />
@@ -53,7 +35,7 @@ $ gpg --armor --symmetric --output - /tmp/hello.txt | curl --upload-file - https
 ### Download & Decrypt
 
 ```bash
-$ curl https://transfer.sh/1lDau/test.txt | gpg --decrypt --output /tmp/hello.txt
+$ curl https://transferng.example.com/1lDau/test.txt | gpg --decrypt --output /tmp/hello.txt
 ```
 
 <br />
@@ -61,7 +43,7 @@ $ curl https://transfer.sh/1lDau/test.txt | gpg --decrypt --output /tmp/hello.tx
 ### Upload to Virustotal
 
 ```bash
-$ curl -X PUT --upload-file nhgbhhj https://transfer.sh/test.txt/virustotal
+$ curl -X PUT --upload-file nhgbhhj https://transferng.example.com/test.txt/virustotal
 ```
 
 <br />
@@ -87,7 +69,7 @@ This section explains how to handle request headers with curl:
 ### Max-Downloads
 
 ```bash
-$ curl --upload-file ./hello.txt https://transfer.sh/hello.txt -H "Max-Downloads: 1" # Limit the number of downloads
+$ curl --upload-file ./hello.txt https://transferng.example.com/hello.txt -H "Max-Downloads: 1" # Limit the number of downloads
 ```
 
 <br />
@@ -95,7 +77,7 @@ $ curl --upload-file ./hello.txt https://transfer.sh/hello.txt -H "Max-Downloads
 ### Max-Days
 
 ```bash
-$ curl --upload-file ./hello.txt https://transfer.sh/hello.txt -H "Max-Days: 1" # Set the number of days before deletion
+$ curl --upload-file ./hello.txt https://transferng.example.com/hello.txt -H "Max-Days: 1" # Set the number of days before deletion
 ```
 
 <br />
@@ -133,9 +115,9 @@ This section explains how to handle response headers:
 The URL used to request the deletion of a file and returned as a response header:
 
 ```bash
-curl -sD - --upload-file ./hello.txt https://transfer.sh/hello.txt | grep -i -E 'transfer\.sh|x-url-delete'
-x-url-delete: https://transfer.sh/hello.txt/BAYh0/hello.txt/PDw0NHPcqU
-https://transfer.sh/hello.txt/BAYh0/hello.txt
+curl -sD - --upload-file ./hello.txt https://transferng.example.com/hello.txt | grep -i -E 'transfer\.sh|x-url-delete'
+x-url-delete: https://transferng.example.com/hello.txt/BAYh0/hello.txt/PDw0NHPcqU
+https://transferng.example.com/hello.txt/BAYh0/hello.txt
 ```
 
 <br />
@@ -154,11 +136,11 @@ See good usage examples on [examples.md](examples.md)
 
 Create direct download link:
 
-https://transfer.sh/1lDau/test.txt --> https://transfer.sh/get/1lDau/test.txt
+https://transferng.example.com/1lDau/test.txt --> https://transferng.example.com/get/1lDau/test.txt
 
 Inline file:
 
-https://transfer.sh/1lDau/test.txt --> https://transfer.sh/inline/1lDau/test.txt
+https://transferng.example.com/1lDau/test.txt --> https://transferng.example.com/inline/1lDau/test.txt
 
 <br />
 
@@ -233,23 +215,23 @@ Supported size formats: `10m`, `100mb`, `1g`, `2.5g`, `512kb`, etc.
 ### Examples
 
 ```bash
-transfer.sh --provider=local --compress-large=10m
+transfer.ng --provider=local --compress-large=10m
 ```
 
 ```bash
-transfer.sh --provider=s3 --compress-large=50m
+transfer.ng --provider=s3 --compress-large=50m
 ```
 
 Disable compression entirely:
 
 ```bash
-transfer.sh --provider=local --compress-large=0
+transfer.ng --provider=local --compress-large=0
 ```
 
 Or set via environment variable:
 
 ```bash
-COMPRESS_LARGE=100m transfer.sh --provider=local
+COMPRESS_LARGE=100m transfer.ng --provider=local
 ```
 
 <br />
@@ -275,8 +257,8 @@ go run main.go --provider=local --listener :8080 --temp-path=/tmp/ --basedir=/tm
 ## Build
 
 ```bash
-$ git clone git@github.com:dutchcoders/transfer.sh.git
-$ cd transfer.sh
+$ git clone git@github.com:morawskidotmy/transfer.ng.git
+$ cd transfer.ng
 $ go build -o transfersh main.go
 ```
 
@@ -288,70 +270,36 @@ $ go build -o transfersh main.go
 
 ## Docker
 
-For easy deployment, we've created an official Docker container. There are two variants, differing only by which user runs the process.
-
-The default one will run as `root`:
-
-> [!WARNING]
-> It is discouraged to use `latest` tag for WatchTower or similar tools. The `latest` tag can reference unreleased developer, test builds, and patch releases for older versions. Use an actual version tag until transfer.sh supports major or minor version tags.
+Build and run transfer.ng in a Docker container:
 
 ```bash
-docker run --publish 8080:8080 dutchcoders/transfer.sh:latest --provider local --basedir /tmp/
+docker build -t transfer.ng:latest .
+```
+
+Run with local storage:
+
+```bash
+docker run --publish 8080:8080 transfer.ng:latest --provider local --basedir /tmp/
+```
+
+Or with custom UID/GID (recommended for security):
+
+```bash
+docker build -t transfer.ng:noroot --build-arg RUNAS=transferng --build-arg PUID=1000 --build-arg PGID=1000 .
+docker run --publish 8080:8080 transfer.ng:noroot --provider local --basedir /tmp/
 ```
 
 <br />
 
-### No root
+### Using Docker Compose
 
-The `-noroot` tags indicate image builds that run with least priviledge to reduce the attack surface might an application get compromised.
-
-> [!NOTE]
-> Using `-noroot` is **recommended**
-
-<br />
-
-The one tagged with the suffix `-noroot` will use `5000` as both UID and GID:
+A `docker-compose.yml` is included for easy deployment:
 
 ```bash
-docker run --publish 8080:8080 dutchcoders/transfer.sh:latest-noroot --provider local --basedir /tmp/
+docker-compose up -d
 ```
 
-<br />
-
-> [!NOTE]
-> Development history details at:
-> - https://github.com/dutchcoders/transfer.sh/pull/418
-
-<br />
-
-### Tags
-
-Name | Usage
---|--
-latest| Latest CI build, can be nightly, at commit, at tag, etc.
-latest-noroot| Latest CI build, can be nightly, at commit, at tag, etc. using [no root]
-nightly| Scheduled CI build every midnight UTC
-nightly-noroot| Scheduled CI build every midnight UTC using [no root]
-edge| Latest CI build after every commit on `main`
-edge-noroot| Latest CI build after every commit on `main` using [no root]
-v`x.y.z`| CI build after tagging a release
-v`x.y.z`-noroot| CI build after tagging a release using [no root]
-
-<br />
-
-### Building the Container
-
-You can also build the container yourself. This allows you to choose which UID/GID will be used, e.g. when using NFS mounts:
-
-```bash
-# Build arguments:
-# * RUNAS: If empty, the container will run as root.
-#          Set this to anything to enable UID/GID selection.
-# * PUID:  UID of the process. Needs RUNAS != "". Defaults to 5000.
-# * PGID:  GID of the process. Needs RUNAS != "". Defaults to 5000.
-
-docker build -t transfer.sh-noroot --build-arg RUNAS=doesntmatter --build-arg PUID=1337 --build-arg PGID=1338 .
-```
+This starts transfer.ng with local storage and persistent volumes.
 
 <br />
 
@@ -409,7 +357,7 @@ Example:
 ```
 export STORJ_BUCKET=<BUCKET NAME>
 export STORJ_ACCESS=<ACCESS GRANT>
-transfer.sh --provider storj
+transfer.ng --provider storj
 ```
 
 <br />
@@ -449,7 +397,7 @@ You need to create an OAuth Client id from console.cloud.google.com, download th
 ### Bash, ash and zsh (multiple files uploaded as zip archive)
 ##### Add this to .bashrc or .zshrc or its equivalent
 ```bash
-transfer() (if [ $# -eq 0 ]; then printf "No arguments specified.\nUsage:\n transfer <file|directory>\n ... | transfer <file_name>\n">&2; return 1; fi; file_name=$(basename "$1"); if [ -t 0 ]; then file="$1"; if [ ! -e "$file" ]; then echo "$file: No such file or directory">&2; return 1; fi; if [ -d "$file" ]; then cd "$file" || return 1; file_name="$file_name.zip"; set -- zip -r -q - .; else set -- cat "$file"; fi; else set -- cat; fi; url=$("$@" | curl --silent --show-error --progress-bar --upload-file "-" "https://transfer.sh/$file_name"); echo "$url"; )
+transfer() (if [ $# -eq 0 ]; then printf "No arguments specified.\nUsage:\n transfer <file|directory>\n ... | transfer <file_name>\n">&2; return 1; fi; file_name=$(basename "$1"); if [ -t 0 ]; then file="$1"; if [ ! -e "$file" ]; then echo "$file: No such file or directory">&2; return 1; fi; if [ -d "$file" ]; then cd "$file" || return 1; file_name="$file_name.zip"; set -- zip -r -q - .; else set -- cat "$file"; fi; else set -- cat; fi; url=$("$@" | curl --silent --show-error --progress-bar --upload-file "-" "https://transferng.example.com/$file_name"); echo "$url"; )
 ```
 
 <br />
@@ -500,7 +448,7 @@ transfer()
         echo "      ${0} \"image.img\" | awk --field-separator=\": \" '/Delete token:/ { print \$2 } /Download link:/ { print \$2 }'"
         echo ""
         echo "  Show help text from \"transfer.sh\":"
-        echo "      curl --request GET \"https://transfer.sh\""
+        echo "      curl --request GET \"https://transferng.example.com\""
         return 0
     else
         for file in "${file_array[@]}"
@@ -541,7 +489,7 @@ transfer()
                 # if "stdout" is redirected to something; e.g. ">/dev/null", "tee /dev/null" or "| <some_command>".
                 # the response header is redirected to "stdout", so redirecting "stdout" to "/dev/null" does not make any sense.
                 # redirecting "curl's" "stderr" to "stdout" ("2>&1") will suppress the progress bar.
-                curl_output=$(curl --request PUT --progress-bar --dump-header - --upload-file "${file}" "https://transfer.sh/")
+                curl_output=$(curl --request PUT --progress-bar --dump-header - --upload-file "${file}" "https://transferng.example.com/")
                 awk_output=$(awk \
                     'gsub("\r", "", $0) && tolower($1) ~ /x-url-delete/ \
                     {
@@ -593,14 +541,14 @@ $ transfer image*
 20480K  total
 Do you really want to upload the above files (2) to "transfer.sh"? (Y/n):
 ######################################################################################################################################################################################################################################## 100.0%
-Delete command: curl --request DELETE "https://transfer.sh/wJw9pz/image2.img/mSctGx7pYCId"
+Delete command: curl --request DELETE "https://transferng.example.com/wJw9pz/image2.img/mSctGx7pYCId"
 Delete token: mSctGx7pYCId
-Download link: https://transfer.sh/wJw9pz/image2.img
+Download link: https://transferng.example.com/wJw9pz/image2.img
 
 ######################################################################################################################################################################################################################################## 100.0%
-Delete command: curl --request DELETE "https://transfer.sh/ljJc5I/image.img/nw7qaoiKUwCU"
+Delete command: curl --request DELETE "https://transferng.example.com/ljJc5I/image.img/nw7qaoiKUwCU"
 Delete token: nw7qaoiKUwCU
-Download link: https://transfer.sh/ljJc5I/image.img
+Download link: https://transferng.example.com/ljJc5I/image.img
 
 $ transfer "image.img" | awk --field-separator=": " '/Delete token:/ { print $2 } /Download link:/ { print $2 }'
 10240K  image.img
@@ -608,7 +556,7 @@ $ transfer "image.img" | awk --field-separator=": " '/Delete token:/ { print $2 
 Do you really want to upload the above files (1) to "transfer.sh"? (Y/n):
 ######################################################################################################################################################################################################################################## 100.0%
 tauN5dE3fWJe
-https://transfer.sh/MYkuqn/image.img
+https://transferng.example.com/MYkuqn/image.img
 ```
 
 <br />
@@ -627,24 +575,17 @@ Contributions are welcome.
 
 <br />
 
-## Creators
+## Original Authors
 
-**Remco Verhoef**
-- <https://twitter.com/remco_verhoef>
-- <https://twitter.com/dutchcoders>
-
-**Uvis Grinfelds**
+**Remco Verhoef** - <https://twitter.com/remco_verhoef>
 
 <br />
 
----
-
-<br />
-
-## Maintainers
+## Contributors
 
 - **Andrea Spacca**
 - **Stefan Benten**
+- **morawskidotmy** (transfer.ng fork)
 
 <br />
 
@@ -657,5 +598,6 @@ Contributions are welcome.
 Code and documentation copyright 2011-2018 Remco Verhoef.
 Code and documentation copyright 2018-2020 Andrea Spacca.
 Code and documentation copyright 2020- Andrea Spacca and Stefan Benten.
+Code and documentation copyright 2024- morawskidotmy (transfer.ng fork).
 
 Code released under [the MIT license](LICENSE).

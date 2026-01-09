@@ -70,7 +70,9 @@ func (s *S3Storage) Head(ctx context.Context, token string, filename string) (co
 		return
 	}
 
-	contentLength = uint64(response.ContentLength)
+	if response.ContentLength != nil {
+		contentLength = uint64(*response.ContentLength)
+	}
 
 	return
 }
@@ -109,7 +111,7 @@ func (s *S3Storage) Get(ctx context.Context, token string, filename string, rng 
 		return
 	}
 
-	contentLength = uint64(response.ContentLength)
+	contentLength = uint64(*response.ContentLength)
 	if rng != nil && response.ContentRange != nil {
 		rng.SetContentRange(*response.ContentRange)
 	}

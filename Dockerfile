@@ -2,10 +2,9 @@
 ARG GO_VERSION=1.24
 FROM golang:${GO_VERSION}-alpine AS build
 
-# Necessary to run 'go get' and to compile the linked binary
 RUN apk add git musl-dev mailcap
 
-WORKDIR /go/src/github.com/dutchcoders/transfer.sh
+WORKDIR /go/src/github.com/morawskidotmy/transfer.ng
 
 COPY go.mod go.sum ./
 
@@ -13,9 +12,8 @@ RUN go mod download
 
 COPY . .
 
-# build & install server
 RUN go mod tidy
-RUN CGO_ENABLED=0 go build -tags netgo -ldflags "-X github.com/dutchcoders/transfer.sh/cmd.Version=$(git describe --tags 2>/dev/null || echo 'unknown') -a -s -w -extldflags '-static'" -o /go/bin/transfersh
+RUN CGO_ENABLED=0 go build -tags netgo -ldflags "-X github.com/morawskidotmy/transfer.ng/cmd.Version=$(git describe --tags 2>/dev/null || echo 'unknown') -a -s -w -extldflags '-static'" -o /go/bin/transfer.ng
 
 ARG PUID=5000 \
     PGID=5000 \
@@ -29,17 +27,20 @@ RUN mkdir -p /tmp/useradd /tmp/empty && \
     echo "${RUNAS}:!::" >> /tmp/useradd/groupshadow; else touch /tmp/useradd/unused; fi
 
 FROM scratch AS final
-LABEL maintainer="Andrea Spacca <andrea.spacca@gmail.com>"
+LABEL maintainer="morawskidotmy" \
+      org.opencontainers.image.title="transfer.ng" \
+      org.opencontainers.image.description="Easy file sharing from the command-line" \
+      org.opencontainers.image.source="https://github.com/morawskidotmy/transfer.ng"
 ARG RUNAS
 
 COPY --from=build /etc/mime.types /etc/mime.types
 COPY --from=build /tmp/empty /tmp
 COPY --from=build /tmp/useradd/* /etc/
-COPY --from=build --chown=${RUNAS}  /go/bin/transfersh /go/bin/transfersh
+COPY --from=build --chown=${RUNAS} /go/bin/transfer.ng /go/bin/transfer.ng
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
 USER ${RUNAS}
 
-ENTRYPOINT ["/go/bin/transfersh", "--listener", ":8080"]
+ENTRYPOINT ["/go/bin/transfer.ng", "--listener", ":8080"]
 
 EXPOSE 8080
