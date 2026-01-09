@@ -435,7 +435,7 @@ func (s *Server) Run() {
 		for _, path := range web.AssetNames() {
 			bytes, err := web.Asset(path)
 			if err != nil {
-				s.logger.Panicf("Unable to parse: path=%s, err=%s", path, err)
+				s.logger.Fatalf("Unable to parse: path=%s, err=%s", path, err)
 			}
 
 			if strings.HasSuffix(path, ".html") {

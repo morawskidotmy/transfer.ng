@@ -10,18 +10,18 @@ const (
 	SYMBOLS = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 )
 
-func token(length int) string {
+func token(length int) (string, error) {
 	var builder strings.Builder
 	builder.Grow(length)
 	
 	b := make([]byte, length)
 	if _, err := cryptoRand.Read(b); err != nil {
-		panic("failed to read random bytes for token generation")
+		return "", err
 	}
 	
 	for i := 0; i < length; i++ {
 		builder.WriteByte(SYMBOLS[b[i]%byte(len(SYMBOLS))])
 	}
 
-	return builder.String()
+	return builder.String(), nil
 }

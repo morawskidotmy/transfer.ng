@@ -80,31 +80,17 @@ func renderFloat(format string, n float64) string {
 		}
 
 		if len(formatDirectiveIndices) > 0 {
-			// Directive at index 0:
-			// Must be a '+'
-			// Raise an error if not the case
-			// index: 0123456789
-			// +0.000,000
-			// +000,000.0
-			// +0000.00
-			// +0000
 			if formatDirectiveIndices[0] == 0 {
 				if formatDirectiveChars[formatDirectiveIndices[0]] != '+' {
-					panic("renderFloat(): invalid positive sign directive")
+					return "NaN"
 				}
 				positiveStr = "+"
 				formatDirectiveIndices = formatDirectiveIndices[1:]
 			}
 
-			// Two directives:
-			// First is thousands separator
-			// Raise an error if not followed by 3-digit
-			// 0123456789
-			// 0.000,000
-			// 000,000.00
 			if len(formatDirectiveIndices) == 2 {
 				if (formatDirectiveIndices[1] - formatDirectiveIndices[0]) != 4 {
-					panic("renderFloat(): thousands separator directive must be followed by 3 digit-specifiers")
+					return "NaN"
 				}
 				thousandStr = string(formatDirectiveChars[formatDirectiveIndices[0]])
 				formatDirectiveIndices = formatDirectiveIndices[1:]
