@@ -397,6 +397,292 @@ func New(options ...OptionFn) (*Server, error) {
 }
 
 // Run starts Server
+func registerMimeTypes() {
+	mimeTypes := [][2]string{
+		{".md", "text/x-markdown"},
+		{".markdown", "text/x-markdown"},
+		{".mdown", "text/x-markdown"},
+		{".mkdown", "text/x-markdown"},
+		{".mkd", "text/x-markdown"},
+		{".mdx", "text/x-markdown"},
+		{".conf", "text/plain"},
+		{".config", "text/plain"},
+		{".cfg", "text/plain"},
+		{".ini", "text/plain"},
+		{".toml", "text/plain"},
+		{".properties", "text/plain"},
+		{".gradle.properties", "text/plain"},
+		{".maven.properties", "text/plain"},
+		{".yml", "text/yaml"},
+		{".yaml", "text/yaml"},
+		{".json", "application/json"},
+		{".jsonld", "application/ld+json"},
+		{".json5", "application/json"},
+		{".geojson", "application/geo+json"},
+		{".xml", "application/xml"},
+		{".xsl", "application/xml"},
+		{".xslt", "application/xml"},
+		{".svg", "image/svg+xml"},
+		{".plist", "application/x-plist"},
+		{".sh", "text/x-shellscript"},
+		{".bash", "text/x-shellscript"},
+		{".zsh", "text/x-shellscript"},
+		{".fish", "text/x-shellscript"},
+		{".ksh", "text/x-shellscript"},
+		{".csh", "text/x-shellscript"},
+		{".tcsh", "text/x-shellscript"},
+		{".ash", "text/x-shellscript"},
+		{".ps1", "text/x-powershell"},
+		{".psd1", "text/x-powershell"},
+		{".psm1", "text/x-powershell"},
+		{".bat", "text/x-batch"},
+		{".cmd", "text/x-batch"},
+		{".sql", "text/x-sql"},
+		{".sqlite", "text/x-sql"},
+		{".plsql", "text/x-sql"},
+		{".tsql", "text/x-sql"},
+		{".env", "text/plain"},
+		{".env.example", "text/plain"},
+		{".env.local", "text/plain"},
+		{".env.development", "text/plain"},
+		{".env.production", "text/plain"},
+		{".editorconfig", "text/plain"},
+		{".gitconfig", "text/plain"},
+		{".gitignore", "text/plain"},
+		{".gitattributes", "text/plain"},
+		{".dockerignore", "text/plain"},
+		{".dockerfile", "text/x-dockerfile"},
+		{".Dockerfile", "text/x-dockerfile"},
+		{".py", "text/x-python"},
+		{".pyw", "text/x-python"},
+		{".pyx", "text/x-python"},
+		{".pyi", "text/x-python"},
+		{".rb", "text/x-ruby"},
+		{".rbw", "text/x-ruby"},
+		{".rake", "text/x-ruby"},
+		{".gemspec", "text/x-ruby"},
+		{".go", "text/x-go"},
+		{".rs", "text/x-rust"},
+		{".java", "text/x-java"},
+		{".class", "application/x-java-applet"},
+		{".jar", "application/x-java-archive"},
+		{".c", "text/x-csrc"},
+		{".cc", "text/x-c++src"},
+		{".cpp", "text/x-c++src"},
+		{".cxx", "text/x-c++src"},
+		{".c++", "text/x-c++src"},
+		{".h", "text/x-csrc"},
+		{".hh", "text/x-c++src"},
+		{".hpp", "text/x-c++src"},
+		{".hxx", "text/x-c++src"},
+		{".h++", "text/x-c++src"},
+		{".hpp", "text/x-c++src"},
+		{".hxx", "text/x-c++src"},
+		{".h++", "text/x-c++src"},
+		{".cs", "text/x-csharp"},
+		{".csx", "text/x-csharp"},
+		{".csproj", "application/xml"},
+		{".vb", "text/x-vbnet"},
+		{".vbproj", "application/xml"},
+		{".fsx", "text/x-fsharp"},
+		{".fsi", "text/x-fsharp"},
+		{".fsproj", "application/xml"},
+		{".swift", "text/x-swift"},
+		{".kt", "text/x-kotlin"},
+		{".kts", "text/x-kotlin"},
+		{".groovy", "text/x-groovy"},
+		{".gradle", "text/x-groovy"},
+		{".lua", "text/x-lua"},
+		{".pl", "text/x-perl"},
+		{".pm", "text/x-perl"},
+		{".php", "text/x-php"},
+		{".phtml", "text/x-php"},
+		{".php3", "text/x-php"},
+		{".php4", "text/x-php"},
+		{".php5", "text/x-php"},
+		{".php7", "text/x-php"},
+		{".php8", "text/x-php"},
+		{".asp", "text/x-asp"},
+		{".aspx", "text/x-asp"},
+		{".asmx", "text/x-asp"},
+		{".ascx", "text/x-asp"},
+		{".master", "text/x-asp"},
+		{".asax", "text/x-asp"},
+		{".asacx", "text/x-asp"},
+		{".handlebars", "text/x-handlebars"},
+		{".hbs", "text/x-handlebars"},
+		{".js", "text/javascript"},
+		{".template", "text/plain"},
+		{".jinja", "text/x-jinja"},
+		{".jinja2", "text/x-jinja"},
+		{".j2", "text/x-jinja"},
+		{".makefile", "text/x-makefile"},
+		{".Makefile", "text/x-makefile"},
+		{".cmake", "text/x-cmake"},
+		{".CMakeLists.txt", "text/x-cmake"},
+		{".gradle", "text/x-gradle"},
+		{".maven", "text/x-maven"},
+		{".pom", "text/x-maven"},
+		{".npm", "text/plain"},
+		{".yarn", "text/plain"},
+		{".requirements.txt", "text/plain"},
+		{".Gemfile", "text/x-ruby"},
+		{".Rakefile", "text/x-ruby"},
+		{".Procfile", "text/plain"},
+		{".lock", "text/plain"},
+		{".log", "text/plain"},
+		{".txt", "text/plain"},
+		{".text", "text/plain"},
+		{".csv", "text/csv"},
+		{".tsv", "text/tab-separated-values"},
+		{".psv", "text/plain"},
+		{".md5", "text/plain"},
+		{".sha1", "text/plain"},
+		{".sha256", "text/plain"},
+		{".sha512", "text/plain"},
+		{".checksum", "text/plain"},
+		{".gpg", "application/pgp-encrypted"},
+		{".asc", "application/pgp-signature"},
+		{".sig", "application/pgp-signature"},
+		{".key", "application/pgp-keys"},
+		{".pub", "text/plain"},
+		{".pem", "application/x-pem-file"},
+		{".crt", "application/x-x509-ca-cert"},
+		{".cer", "application/x-x509-ca-cert"},
+		{".der", "application/x-x509-ca-cert"},
+		{".p7b", "application/x-pkcs7-certificates"},
+		{".p12", "application/x-pkcs12"},
+		{".pfx", "application/x-pkcs12"},
+		{".jks", "application/x-java-keystore"},
+		{".keystore", "application/x-java-keystore"},
+		{".csr", "application/pkcs10"},
+		{".acme", "text/plain"},
+		{".htaccess", "text/plain"},
+		{".htpasswd", "text/plain"},
+		{".htgroups", "text/plain"},
+		{".robots.txt", "text/plain"},
+		{".sitemap.xml", "application/xml"},
+		{".manifest", "text/cache-manifest"},
+		{".webmanifest", "application/manifest+json"},
+		{".appcache", "text/cache-manifest"},
+		{".mo", "application/x-gettext"},
+		{".po", "application/x-gettext"},
+		{".pot", "application/x-gettext"},
+		{".ts", "application/typescript"},
+		{".po", "text/x-po"},
+		{".pot", "text/x-pot"},
+		{".resx", "application/x-resx"},
+		{".strings", "text/plain"},
+		{".properties", "text/x-properties"},
+		{".gradle", "text/x-gradle"},
+		{".bazel", "text/plain"},
+		{".buck", "text/plain"},
+		{".bazelrc", "text/plain"},
+		{".clangformat", "text/plain"},
+		{".clang-format", "text/plain"},
+		{".prettierrc", "application/json"},
+		{".prettierignore", "text/plain"},
+		{".eslintrc", "application/json"},
+		{".eslintignore", "text/plain"},
+		{".stylelintrc", "application/json"},
+		{".stylelintignore", "text/plain"},
+		{".babelrc", "application/json"},
+		{".babelrc.js", "text/javascript"},
+		{".eslintrc.json", "application/json"},
+		{".eslintrc.yml", "text/yaml"},
+		{".eslintrc.yaml", "text/yaml"},
+		{".eslintrc.js", "text/javascript"},
+		{".browserslistrc", "text/plain"},
+		{".npmrc", "text/plain"},
+		{".yarnrc", "text/plain"},
+		{".nvmrc", "text/plain"},
+		{".node-version", "text/plain"},
+		{".ruby-version", "text/plain"},
+		{".go-version", "text/plain"},
+		{".python-version", "text/plain"},
+		{".php-version", "text/plain"},
+		{".terraform", "text/plain"},
+		{".tf", "text/plain"},
+		{".tfvars", "text/plain"},
+		{".hcl", "text/plain"},
+		{".ansible", "text/x-yaml"},
+		{".yml.j2", "text/x-jinja"},
+		{".yaml.j2", "text/x-jinja"},
+		{".graphql", "text/graphql"},
+		{".gql", "text/graphql"},
+		{".proto", "text/x-protobuf"},
+		{".thrift", "text/x-thrift"},
+		{".idl", "text/x-idl"},
+		{".wsdl", "application/xml"},
+		{".wadl", "application/xml"},
+		{".raml", "application/raml+yaml"},
+		{".openapi", "application/yaml"},
+		{".swagger", "application/yaml"},
+		{".swagger.json", "application/json"},
+		{".asyncapi", "application/yaml"},
+		{".asyncapi.json", "application/json"},
+		{".hh", "text/x-c++src"},
+		{".hpp", "text/x-c++src"},
+		{".hxx", "text/x-c++src"},
+		{".h++", "text/x-c++src"},
+		{".csx", "text/x-csharp"},
+		{".csproj", "application/xml"},
+		{".vbproj", "application/xml"},
+		{".fsx", "text/x-fsharp"},
+		{".fsproj", "application/xml"},
+		{".vb", "text/x-vbnet"},
+		{".vbs", "text/x-vbscript"},
+		{".mjs", "text/javascript"},
+		{".cjs", "text/javascript"},
+		{".tsx", "text/typescript"},
+		{".jsx", "text/jsx"},
+		{".css", "text/css"},
+		{".scss", "text/x-scss"},
+		{".sass", "text/x-sass"},
+		{".less", "text/x-less"},
+		{".styl", "text/x-stylus"},
+		{".stylus", "text/x-stylus"},
+		{".html", "text/html"},
+		{".htm", "text/html"},
+		{".xhtml", "application/xhtml+xml"},
+		{".vue", "text/x-vue"},
+		{".svelte", "text/x-svelte"},
+		{".astro", "text/x-astro"},
+		{".scala", "text/x-scala"},
+		{".t", "text/x-perl"},
+		{".vim", "text/x-vim"},
+		{".el", "text/x-elisp"},
+		{".lisp", "text/x-lisp"},
+		{".clj", "text/x-clojure"},
+		{".cljs", "text/x-clojure"},
+		{".edn", "text/x-clojure"},
+		{".ex", "text/x-elixir"},
+		{".exs", "text/x-elixir"},
+		{".erl", "text/x-erlang"},
+		{".hrl", "text/x-erlang"},
+		{".ml", "text/x-ocaml"},
+		{".mli", "text/x-ocaml"},
+		{".fs", "text/x-fsharp"},
+		{".fsi", "text/x-fsharp"},
+		{".hs", "text/x-haskell"},
+		{".lhs", "text/x-haskell"},
+		{".r", "text/x-r"},
+		{".R", "text/x-r"},
+		{".jl", "text/x-julia"},
+		{".m", "text/x-matlab"},
+		{".mm", "text/x-objc++"},
+		{".dart", "text/x-dart"},
+		{".pas", "text/x-pascal"},
+		{".pp", "text/x-pascal"},
+		{".d", "text/x-d"},
+		{".asm", "text/x-asm"},
+		{".s", "text/x-asm"},
+	}
+	for _, mt := range mimeTypes {
+		_ = mime.AddExtensionType(mt[0], mt[1])
+	}
+}
+
 func (s *Server) Run() {
 	listening := false
 
@@ -425,259 +711,7 @@ func (s *Server) Run() {
 	staticHandler := http.FileServer(fs)
 	s.setupRoutes(r, staticHandler)
 
-	_ = mime.AddExtensionType(".md", "text/x-markdown")
-	_ = mime.AddExtensionType(".markdown", "text/x-markdown")
-	_ = mime.AddExtensionType(".mdown", "text/x-markdown")
-	_ = mime.AddExtensionType(".mkdown", "text/x-markdown")
-	_ = mime.AddExtensionType(".mkd", "text/x-markdown")
-	_ = mime.AddExtensionType(".mdx", "text/x-markdown")
-	_ = mime.AddExtensionType(".conf", "text/plain")
-	_ = mime.AddExtensionType(".config", "text/plain")
-	_ = mime.AddExtensionType(".cfg", "text/plain")
-	_ = mime.AddExtensionType(".ini", "text/plain")
-	_ = mime.AddExtensionType(".toml", "text/plain")
-	_ = mime.AddExtensionType(".properties", "text/plain")
-	_ = mime.AddExtensionType(".gradle.properties", "text/plain")
-	_ = mime.AddExtensionType(".maven.properties", "text/plain")
-	_ = mime.AddExtensionType(".yml", "text/yaml")
-	_ = mime.AddExtensionType(".yaml", "text/yaml")
-	_ = mime.AddExtensionType(".json", "application/json")
-	_ = mime.AddExtensionType(".jsonld", "application/ld+json")
-	_ = mime.AddExtensionType(".json5", "application/json")
-	_ = mime.AddExtensionType(".geojson", "application/geo+json")
-	_ = mime.AddExtensionType(".xml", "application/xml")
-	_ = mime.AddExtensionType(".xsl", "application/xml")
-	_ = mime.AddExtensionType(".xslt", "application/xml")
-	_ = mime.AddExtensionType(".svg", "image/svg+xml")
-	_ = mime.AddExtensionType(".plist", "application/x-plist")
-	_ = mime.AddExtensionType(".sh", "text/x-shellscript")
-	_ = mime.AddExtensionType(".bash", "text/x-shellscript")
-	_ = mime.AddExtensionType(".zsh", "text/x-shellscript")
-	_ = mime.AddExtensionType(".fish", "text/x-shellscript")
-	_ = mime.AddExtensionType(".ksh", "text/x-shellscript")
-	_ = mime.AddExtensionType(".csh", "text/x-shellscript")
-	_ = mime.AddExtensionType(".tcsh", "text/x-shellscript")
-	_ = mime.AddExtensionType(".ash", "text/x-shellscript")
-	_ = mime.AddExtensionType(".ps1", "text/x-powershell")
-	_ = mime.AddExtensionType(".psd1", "text/x-powershell")
-	_ = mime.AddExtensionType(".psm1", "text/x-powershell")
-	_ = mime.AddExtensionType(".bat", "text/x-batch")
-	_ = mime.AddExtensionType(".cmd", "text/x-batch")
-	_ = mime.AddExtensionType(".sql", "text/x-sql")
-	_ = mime.AddExtensionType(".sqlite", "text/x-sql")
-	_ = mime.AddExtensionType(".plsql", "text/x-sql")
-	_ = mime.AddExtensionType(".tsql", "text/x-sql")
-	_ = mime.AddExtensionType(".env", "text/plain")
-	_ = mime.AddExtensionType(".env.example", "text/plain")
-	_ = mime.AddExtensionType(".env.local", "text/plain")
-	_ = mime.AddExtensionType(".env.development", "text/plain")
-	_ = mime.AddExtensionType(".env.production", "text/plain")
-	_ = mime.AddExtensionType(".editorconfig", "text/plain")
-	_ = mime.AddExtensionType(".gitconfig", "text/plain")
-	_ = mime.AddExtensionType(".gitignore", "text/plain")
-	_ = mime.AddExtensionType(".gitattributes", "text/plain")
-	_ = mime.AddExtensionType(".dockerignore", "text/plain")
-	_ = mime.AddExtensionType(".dockerfile", "text/x-dockerfile")
-	_ = mime.AddExtensionType(".Dockerfile", "text/x-dockerfile")
-	_ = mime.AddExtensionType(".py", "text/x-python")
-	_ = mime.AddExtensionType(".pyw", "text/x-python")
-	_ = mime.AddExtensionType(".pyx", "text/x-python")
-	_ = mime.AddExtensionType(".pyi", "text/x-python")
-	_ = mime.AddExtensionType(".rb", "text/x-ruby")
-	_ = mime.AddExtensionType(".rbw", "text/x-ruby")
-	_ = mime.AddExtensionType(".rake", "text/x-ruby")
-	_ = mime.AddExtensionType(".gemspec", "text/x-ruby")
-	_ = mime.AddExtensionType(".go", "text/x-go")
-	_ = mime.AddExtensionType(".rs", "text/x-rust")
-	_ = mime.AddExtensionType(".java", "text/x-java")
-	_ = mime.AddExtensionType(".class", "application/x-java-applet")
-	_ = mime.AddExtensionType(".jar", "application/x-java-archive")
-	_ = mime.AddExtensionType(".c", "text/x-csrc")
-	_ = mime.AddExtensionType(".cc", "text/x-c++src")
-	_ = mime.AddExtensionType(".cpp", "text/x-c++src")
-	_ = mime.AddExtensionType(".cxx", "text/x-c++src")
-	_ = mime.AddExtensionType(".c++", "text/x-c++src")
-	_ = mime.AddExtensionType(".h", "text/x-csrc")
-	_ = mime.AddExtensionType(".hh", "text/x-c++src")
-	_ = mime.AddExtensionType(".hpp", "text/x-c++src")
-	_ = mime.AddExtensionType(".hxx", "text/x-c++src")
-	_ = mime.AddExtensionType(".h++", "text/x-c++src")
-	_ = mime.AddExtensionType(".cs", "text/x-csharp")
-	_ = mime.AddExtensionType(".php", "text/x-php")
-	_ = mime.AddExtensionType(".php3", "text/x-php")
-	_ = mime.AddExtensionType(".php4", "text/x-php")
-	_ = mime.AddExtensionType(".php5", "text/x-php")
-	_ = mime.AddExtensionType(".php7", "text/x-php")
-	_ = mime.AddExtensionType(".php8", "text/x-php")
-	_ = mime.AddExtensionType(".phtml", "text/x-php")
-	_ = mime.AddExtensionType(".swift", "text/x-swift")
-	_ = mime.AddExtensionType(".kt", "text/x-kotlin")
-	_ = mime.AddExtensionType(".scala", "text/x-scala")
-	_ = mime.AddExtensionType(".groovy", "text/x-groovy")
-	_ = mime.AddExtensionType(".gradle", "text/x-gradle")
-	_ = mime.AddExtensionType(".pl", "text/x-perl")
-	_ = mime.AddExtensionType(".pm", "text/x-perl")
-	_ = mime.AddExtensionType(".t", "text/x-perl")
-	_ = mime.AddExtensionType(".lua", "text/x-lua")
-	_ = mime.AddExtensionType(".vim", "text/x-vim")
-	_ = mime.AddExtensionType(".el", "text/x-elisp")
-	_ = mime.AddExtensionType(".lisp", "text/x-lisp")
-	_ = mime.AddExtensionType(".clj", "text/x-clojure")
-	_ = mime.AddExtensionType(".cljs", "text/x-clojure")
-	_ = mime.AddExtensionType(".edn", "text/x-clojure")
-	_ = mime.AddExtensionType(".ex", "text/x-elixir")
-	_ = mime.AddExtensionType(".exs", "text/x-elixir")
-	_ = mime.AddExtensionType(".erl", "text/x-erlang")
-	_ = mime.AddExtensionType(".hrl", "text/x-erlang")
-	_ = mime.AddExtensionType(".ml", "text/x-ocaml")
-	_ = mime.AddExtensionType(".mli", "text/x-ocaml")
-	_ = mime.AddExtensionType(".fs", "text/x-fsharp")
-	_ = mime.AddExtensionType(".fsx", "text/x-fsharp")
-	_ = mime.AddExtensionType(".fsi", "text/x-fsharp")
-	_ = mime.AddExtensionType(".hs", "text/x-haskell")
-	_ = mime.AddExtensionType(".lhs", "text/x-haskell")
-	_ = mime.AddExtensionType(".r", "text/x-r")
-	_ = mime.AddExtensionType(".R", "text/x-r")
-	_ = mime.AddExtensionType(".jl", "text/x-julia")
-	_ = mime.AddExtensionType(".m", "text/x-matlab")
-	_ = mime.AddExtensionType(".m", "text/x-objc")
-	_ = mime.AddExtensionType(".mm", "text/x-objc++")
-	_ = mime.AddExtensionType(".dart", "text/x-dart")
-	_ = mime.AddExtensionType(".pas", "text/x-pascal")
-	_ = mime.AddExtensionType(".pp", "text/x-pascal")
-	_ = mime.AddExtensionType(".d", "text/x-d")
-	_ = mime.AddExtensionType(".asm", "text/x-asm")
-	_ = mime.AddExtensionType(".s", "text/x-asm")
-	_ = mime.AddExtensionType(".vb", "text/x-vbnet")
-	_ = mime.AddExtensionType(".vbs", "text/x-vbscript")
-	_ = mime.AddExtensionType(".js", "text/javascript")
-	_ = mime.AddExtensionType(".mjs", "text/javascript")
-	_ = mime.AddExtensionType(".cjs", "text/javascript")
-	_ = mime.AddExtensionType(".ts", "text/typescript")
-	_ = mime.AddExtensionType(".tsx", "text/typescript")
-	_ = mime.AddExtensionType(".jsx", "text/jsx")
-	_ = mime.AddExtensionType(".css", "text/css")
-	_ = mime.AddExtensionType(".scss", "text/x-scss")
-	_ = mime.AddExtensionType(".sass", "text/x-sass")
-	_ = mime.AddExtensionType(".less", "text/x-less")
-	_ = mime.AddExtensionType(".styl", "text/x-stylus")
-	_ = mime.AddExtensionType(".stylus", "text/x-stylus")
-	_ = mime.AddExtensionType(".html", "text/html")
-	_ = mime.AddExtensionType(".htm", "text/html")
-	_ = mime.AddExtensionType(".xhtml", "application/xhtml+xml")
-	_ = mime.AddExtensionType(".vue", "text/x-vue")
-	_ = mime.AddExtensionType(".svelte", "text/x-svelte")
-	_ = mime.AddExtensionType(".astro", "text/x-astro")
-	_ = mime.AddExtensionType(".jsx", "text/jsx")
-	_ = mime.AddExtensionType(".template", "text/plain")
-	_ = mime.AddExtensionType(".jinja", "text/x-jinja")
-	_ = mime.AddExtensionType(".jinja2", "text/x-jinja")
-	_ = mime.AddExtensionType(".j2", "text/x-jinja")
-	_ = mime.AddExtensionType(".makefile", "text/x-makefile")
-	_ = mime.AddExtensionType(".Makefile", "text/x-makefile")
-	_ = mime.AddExtensionType(".cmake", "text/x-cmake")
-	_ = mime.AddExtensionType(".CMakeLists.txt", "text/x-cmake")
-	_ = mime.AddExtensionType(".gradle", "text/x-gradle")
-	_ = mime.AddExtensionType(".maven", "text/x-maven")
-	_ = mime.AddExtensionType(".pom", "text/x-maven")
-	_ = mime.AddExtensionType(".npm", "text/plain")
-	_ = mime.AddExtensionType(".yarn", "text/plain")
-	_ = mime.AddExtensionType(".requirements.txt", "text/plain")
-	_ = mime.AddExtensionType(".Gemfile", "text/x-ruby")
-	_ = mime.AddExtensionType(".Rakefile", "text/x-ruby")
-	_ = mime.AddExtensionType(".Procfile", "text/plain")
-	_ = mime.AddExtensionType(".lock", "text/plain")
-	_ = mime.AddExtensionType(".log", "text/plain")
-	_ = mime.AddExtensionType(".txt", "text/plain")
-	_ = mime.AddExtensionType(".text", "text/plain")
-	_ = mime.AddExtensionType(".csv", "text/csv")
-	_ = mime.AddExtensionType(".tsv", "text/tab-separated-values")
-	_ = mime.AddExtensionType(".psv", "text/plain")
-	_ = mime.AddExtensionType(".md5", "text/plain")
-	_ = mime.AddExtensionType(".sha1", "text/plain")
-	_ = mime.AddExtensionType(".sha256", "text/plain")
-	_ = mime.AddExtensionType(".sha512", "text/plain")
-	_ = mime.AddExtensionType(".checksum", "text/plain")
-	_ = mime.AddExtensionType(".gpg", "application/pgp-encrypted")
-	_ = mime.AddExtensionType(".asc", "application/pgp-signature")
-	_ = mime.AddExtensionType(".sig", "application/pgp-signature")
-	_ = mime.AddExtensionType(".key", "application/pgp-keys")
-	_ = mime.AddExtensionType(".pub", "text/plain")
-	_ = mime.AddExtensionType(".pem", "application/x-pem-file")
-	_ = mime.AddExtensionType(".crt", "application/x-x509-ca-cert")
-	_ = mime.AddExtensionType(".cer", "application/x-x509-ca-cert")
-	_ = mime.AddExtensionType(".der", "application/x-x509-ca-cert")
-	_ = mime.AddExtensionType(".p7b", "application/x-pkcs7-certificates")
-	_ = mime.AddExtensionType(".p12", "application/x-pkcs12")
-	_ = mime.AddExtensionType(".pfx", "application/x-pkcs12")
-	_ = mime.AddExtensionType(".jks", "application/x-java-keystore")
-	_ = mime.AddExtensionType(".keystore", "application/x-java-keystore")
-	_ = mime.AddExtensionType(".csr", "application/pkcs10")
-	_ = mime.AddExtensionType(".acme", "text/plain")
-	_ = mime.AddExtensionType(".htaccess", "text/plain")
-	_ = mime.AddExtensionType(".htpasswd", "text/plain")
-	_ = mime.AddExtensionType(".htgroups", "text/plain")
-	_ = mime.AddExtensionType(".robots.txt", "text/plain")
-	_ = mime.AddExtensionType(".sitemap.xml", "application/xml")
-	_ = mime.AddExtensionType(".manifest", "text/cache-manifest")
-	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
-	_ = mime.AddExtensionType(".appcache", "text/cache-manifest")
-	_ = mime.AddExtensionType(".mo", "application/x-gettext")
-	_ = mime.AddExtensionType(".po", "application/x-gettext")
-	_ = mime.AddExtensionType(".pot", "application/x-gettext")
-	_ = mime.AddExtensionType(".ts", "application/typescript")
-	_ = mime.AddExtensionType(".po", "text/x-po")
-	_ = mime.AddExtensionType(".pot", "text/x-pot")
-	_ = mime.AddExtensionType(".resx", "application/x-resx")
-	_ = mime.AddExtensionType(".strings", "text/plain")
-	_ = mime.AddExtensionType(".properties", "text/x-properties")
-	_ = mime.AddExtensionType(".gradle", "text/x-gradle")
-	_ = mime.AddExtensionType(".bazel", "text/plain")
-	_ = mime.AddExtensionType(".buck", "text/plain")
-	_ = mime.AddExtensionType(".bazelrc", "text/plain")
-	_ = mime.AddExtensionType(".clangformat", "text/plain")
-	_ = mime.AddExtensionType(".clang-format", "text/plain")
-	_ = mime.AddExtensionType(".prettierrc", "application/json")
-	_ = mime.AddExtensionType(".prettierignore", "text/plain")
-	_ = mime.AddExtensionType(".eslintrc", "application/json")
-	_ = mime.AddExtensionType(".eslintignore", "text/plain")
-	_ = mime.AddExtensionType(".stylelintrc", "application/json")
-	_ = mime.AddExtensionType(".stylelintignore", "text/plain")
-	_ = mime.AddExtensionType(".babelrc", "application/json")
-	_ = mime.AddExtensionType(".babelrc.js", "text/javascript")
-	_ = mime.AddExtensionType(".eslintrc.json", "application/json")
-	_ = mime.AddExtensionType(".eslintrc.yml", "text/yaml")
-	_ = mime.AddExtensionType(".eslintrc.yaml", "text/yaml")
-	_ = mime.AddExtensionType(".eslintrc.js", "text/javascript")
-	_ = mime.AddExtensionType(".browserslistrc", "text/plain")
-	_ = mime.AddExtensionType(".npmrc", "text/plain")
-	_ = mime.AddExtensionType(".yarnrc", "text/plain")
-	_ = mime.AddExtensionType(".nvmrc", "text/plain")
-	_ = mime.AddExtensionType(".node-version", "text/plain")
-	_ = mime.AddExtensionType(".ruby-version", "text/plain")
-	_ = mime.AddExtensionType(".go-version", "text/plain")
-	_ = mime.AddExtensionType(".python-version", "text/plain")
-	_ = mime.AddExtensionType(".php-version", "text/plain")
-	_ = mime.AddExtensionType(".terraform", "text/plain")
-	_ = mime.AddExtensionType(".tf", "text/plain")
-	_ = mime.AddExtensionType(".tfvars", "text/plain")
-	_ = mime.AddExtensionType(".hcl", "text/plain")
-	_ = mime.AddExtensionType(".ansible", "text/x-yaml")
-	_ = mime.AddExtensionType(".yml.j2", "text/x-jinja")
-	_ = mime.AddExtensionType(".yaml.j2", "text/x-jinja")
-	_ = mime.AddExtensionType(".graphql", "text/graphql")
-	_ = mime.AddExtensionType(".gql", "text/graphql")
-	_ = mime.AddExtensionType(".proto", "text/x-protobuf")
-	_ = mime.AddExtensionType(".thrift", "text/x-thrift")
-	_ = mime.AddExtensionType(".idl", "text/x-idl")
-	_ = mime.AddExtensionType(".wsdl", "application/xml")
-	_ = mime.AddExtensionType(".wadl", "application/xml")
-	_ = mime.AddExtensionType(".raml", "application/raml+yaml")
-	_ = mime.AddExtensionType(".openapi", "application/yaml")
-	_ = mime.AddExtensionType(".swagger", "application/yaml")
-	_ = mime.AddExtensionType(".swagger.json", "application/json")
-	_ = mime.AddExtensionType(".asyncapi", "application/yaml")
-	_ = mime.AddExtensionType(".asyncapi.json", "application/json")
+	registerMimeTypes()
 
 	s.logger.Printf("Transfer.sh server started.\nusing temp folder: %s\nusing storage provider: %s", s.tempPath, s.storage.Type())
 
