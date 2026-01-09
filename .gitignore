@@ -6,7 +6,7 @@ bin/
 *.pyc
 *.egg-info/
 .idea/
-
+transfer.ng
 .tmp
 .vagrant
 

@@ -14,6 +14,7 @@ RUN go mod download
 COPY . .
 
 # build & install server
+RUN go mod tidy
 RUN CGO_ENABLED=0 go build -tags netgo -ldflags "-X github.com/dutchcoders/transfer.sh/cmd.Version=$(git describe --tags 2>/dev/null || echo 'unknown') -a -s -w -extldflags '-static'" -o /go/bin/transfersh
 
 ARG PUID=5000 \
