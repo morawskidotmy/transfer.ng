@@ -362,14 +362,38 @@ func versionCommand(_ *cli.Context) error {
 	return nil
 }
 
-// New is the factory for transfer.sh
+func appAction(c *cli.Context, logger *log.Logger) error {
+	options := []server.OptionFn{}
+
+	addBasicOptions(c, &options, logger)
+	addTLSOptions(c, &options)
+
+	if err := addSecurityOptions(c, &options); err != nil {
+		return err
+	}
+
+	purgeDays := c.Int("purge-days")
+	if err := addStorageProvider(c, &options, logger, purgeDays); err != nil {
+		return err
+	}
+
+	srvr, err := server.New(options...)
+	if err != nil {
+		logger.Println(color.RedString("Error starting server: %s", err.Error()))
+		return err
+	}
+
+	srvr.Run()
+	return nil
+}
+
 func New() *Cmd {
-	logger := log.New(os.Stdout, "[transfer.sh]", log.LstdFlags)
+	logger := log.New(os.Stdout, "[transfer.ng]", log.LstdFlags)
 
 	app := cli.NewApp()
-	app.Name = "transfer.sh"
+	app.Name = "transfer.ng"
 	app.Authors = []*cli.Author{}
-	app.Usage = "transfer.sh"
+	app.Usage = "transfer.ng"
 	app.Description = `Easy file sharing from the command line`
 	app.Version = Version
 	app.Flags = globalFlags
@@ -386,28 +410,7 @@ func New() *Cmd {
 	}
 
 	app.Action = func(c *cli.Context) error {
-		options := []server.OptionFn{}
-
-		addBasicOptions(c, &options, logger)
-		addTLSOptions(c, &options)
-
-		if err := addSecurityOptions(c, &options); err != nil {
-			return err
-		}
-
-		purgeDays := c.Int("purge-days")
-		if err := addStorageProvider(c, &options, logger, purgeDays); err != nil {
-			return err
-		}
-
-		srvr, err := server.New(options...)
-		if err != nil {
-			logger.Println(color.RedString("Error starting server: %s", err.Error()))
-			return err
-		}
-
-		srvr.Run()
-		return nil
+		return appAction(c, logger)
 	}
 
 	return &Cmd{
