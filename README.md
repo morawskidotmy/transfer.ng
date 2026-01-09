@@ -7,6 +7,8 @@ IP filter and HTTP auth bypass via unauthenticated X-Forwarded-For header spoofi
 
 Easy and fast file sharing from the command-line. This code contains the server with everything you need to create your own instance.
 
+*Better score than original (by 25%) RAAAAH*
+
 transfer.ng supports the s3 (Amazon S3), gdrive (Google Drive), storj (Storj) providers, and local file system (local).
 
 <br />
