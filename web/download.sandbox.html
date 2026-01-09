@@ -19,6 +19,18 @@
       border: 1px solid #0f0;
       padding: 15px;
     }
+    @media (max-width: 768px) {
+      .container {
+        padding: 12px;
+        border-left: none;
+        border-right: none;
+      }
+    }
+    @media (max-width: 480px) {
+      .container {
+        padding: 10px;
+      }
+    }
     .header {
       text-align: center;
       border-bottom: 1px solid #0f0;
@@ -46,6 +58,15 @@
       font-family: "Courier New", monospace;
       font-weight: bold;
       margin: 8px 4px 8px 0;
+      font-size: 0.95em;
+    }
+    @media (max-width: 480px) {
+      button {
+        display: block;
+        width: 100%;
+        margin: 8px 0;
+        padding: 10px 8px;
+      }
     }
     button:hover { 
       background: #00cc00;

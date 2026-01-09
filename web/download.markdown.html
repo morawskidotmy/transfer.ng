@@ -17,6 +17,19 @@
       max-width: 100ch; 
       margin: 0 auto;
     }
+    @media (max-width: 768px) {
+      .container {
+        padding: 0 10px;
+      }
+    }
+    @media (max-width: 480px) {
+      body {
+        padding: 10px;
+      }
+      .container {
+        padding: 0;
+      }
+    }
     .header {
       text-align: center;
       border: 1px solid #0f0;
@@ -28,6 +41,18 @@
       padding: 15px;
       margin: 15px 0;
       background: #0a0a0a;
+    }
+    @media (max-width: 768px) {
+      .content-section {
+        padding: 12px;
+        margin: 12px 0;
+      }
+    }
+    @media (max-width: 480px) {
+      .content-section {
+        padding: 10px;
+        margin: 10px 0;
+      }
     }
     .info-section {
       border: 1px dashed #0f0;
@@ -50,6 +75,15 @@
       font-family: "Courier New", monospace;
       font-weight: bold;
       margin: 8px 4px 8px 0;
+      font-size: 0.95em;
+    }
+    @media (max-width: 480px) {
+      button {
+        display: block;
+        width: 100%;
+        margin: 8px 0;
+        padding: 10px 8px;
+      }
     }
     button:hover { 
       background: #00cc00;
@@ -66,6 +100,14 @@
       border: 1px solid #0f0;
       overflow-x: auto;
       margin: 8px 0;
+      word-wrap: break-word;
+      white-space: pre-wrap;
+    }
+    @media (max-width: 480px) {
+      pre {
+        font-size: 0.7em;
+        padding: 8px;
+      }
     }
     h1, h2, h3, h4, h5, h6 {
       margin: 12px 0 6px 0;
