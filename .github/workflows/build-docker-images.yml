@@ -1,4 +1,4 @@
-name: deploy multi-architecture Docker images for transfer.sh with buildx
+name: deploy multi-architecture Docker images for transfer.ng with buildx
 
 on:
   schedule:
@@ -21,7 +21,7 @@ jobs:
         name: Prepare
         id: prepare
         run: |
-          DOCKER_IMAGE=dutchcoders/transfer.sh
+          DOCKER_IMAGE=morawskidotmy/transfer.ng
           DOCKER_PLATFORMS=linux/amd64,linux/arm/v7,linux/arm64,linux/386
           VERSION=edge
 
