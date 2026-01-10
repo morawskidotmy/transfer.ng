@@ -93,15 +93,15 @@ jobs:
       CGO_ENABLED: 0
     steps:
       - name: Checkout codebase
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Show workflow information 
         id: get_filename
         run: |
           export _NAME=$(jq ".[\"$GOOS-$GOARCH$GOARM$GOMIPS\"].friendlyName" -r < .github/build/friendly-filenames.json)
           echo "GOOS: $GOOS, GOARCH: $GOARCH, GOARM: $GOARM, GOMIPS: $GOMIPS, RELEASE_NAME: $_NAME"
-          echo "::set-output name=ASSET_NAME::$_NAME"
-          echo "::set-output name=GIT_TAG::${GITHUB_REF##*/}"
+          echo "ASSET_NAME=$_NAME" >> $GITHUB_OUTPUT
+          echo "GIT_TAG=${GITHUB_REF##*/}" >> $GITHUB_OUTPUT
           echo "ASSET_NAME=$_NAME" >> $GITHUB_ENV
 
       - name: Set up Go
@@ -153,7 +153,7 @@ jobs:
           mv build_assets transfersh-${GITHUB_REF##*/}-${ASSET_NAME}
 
       - name: Upload files to Artifacts
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: transfersh-${{ steps.get_filename.outputs.GIT_TAG }}-${{ steps.get_filename.outputs.ASSET_NAME }}
           path: |
