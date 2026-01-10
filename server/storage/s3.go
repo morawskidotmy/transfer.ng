@@ -37,7 +37,7 @@ func NewS3Storage(ctx context.Context, accessKey, secretKey, bucketName string, 
 		o.Region = region
 		o.UsePathStyle = forcePathStyle
 		if len(endpoint) > 0 {
-			o.EndpointResolver = s3.EndpointResolverFromURL(endpoint)
+			o.BaseEndpoint = aws.String(endpoint)
 		}
 	})
 

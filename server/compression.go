@@ -23,7 +23,7 @@ func NewCompressionReader(reader io.ReadCloser, isCompressed bool) (*Compression
 		var err error
 		cr.decompressor, err = zstd.NewReader(reader)
 		if err != nil {
-			reader.Close()
+			_ = reader.Close()
 			return nil, err
 		}
 	}
@@ -50,7 +50,7 @@ func CompressStream(writer io.Writer, reader io.Reader) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer encoder.Close()
+	defer func() { _ = encoder.Close() }()
 
 	written, err := io.Copy(encoder, reader)
 	return written, err
@@ -65,7 +65,7 @@ func CompressBuffer(data []byte) (*bytes.Buffer, error) {
 
 	_, err = encoder.Write(data)
 	if err != nil {
-		encoder.Close()
+		_ = encoder.Close()
 		return nil, err
 	}
 

@@ -29,7 +29,7 @@ func AssetDir(name string) ([]string, error) {
 
 func AssetNames() []string {
 	var names []string
-	fs.WalkDir(FS, ".", func(path string, d fs.DirEntry, err error) error {
+	_ = fs.WalkDir(FS, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
