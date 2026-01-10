@@ -119,8 +119,8 @@ func encrypt(plaintext io.ReadCloser, password []byte) (io.ReadCloser, error) {
 	pr, pw := io.Pipe()
 
 	go func() {
-		defer plaintext.Close()
-		defer pw.Close()
+		defer func() { _ = plaintext.Close() }()
+		defer func() { _ = pw.Close() }()
 
 		config := &packet.Config{
 			DefaultCipher: packet.CipherAES256,

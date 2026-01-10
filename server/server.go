@@ -806,7 +806,7 @@ func (s *Server) Run() {
 	}
 
 	if s.logFile != nil {
-		s.logFile.Close()
+		_ = s.logFile.Close()
 	}
 
 	s.logger.Printf("Server stopped.")
