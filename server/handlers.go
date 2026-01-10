@@ -50,8 +50,8 @@ import (
 
 const getPathPart = "get"
 
-func stripPrefix(path string) string {
-	return strings.Replace(path, web.Prefix+"/", "", -1)
+func stripPrefix(p string) string {
+	return strings.TrimPrefix(p, web.Prefix+"/")
 }
 
 func initTextTemplates() *textTemplate.Template {
@@ -115,77 +115,50 @@ func decrypt(ciphertext io.ReadCloser, password []byte) (plaintext io.ReadCloser
 	return
 }
 
-type encryptWrapperReader struct {
-	plaintext         io.Reader
-	encrypt           io.WriteCloser
-	armored           io.WriteCloser
-	buffer            io.ReadWriter
-	plaintextReadZero bool
-}
+func encrypt(plaintext io.ReadCloser, password []byte) (io.ReadCloser, error) {
+	pr, pw := io.Pipe()
 
-func (e *encryptWrapperReader) Read(p []byte) (n int, err error) {
-	p2 := make([]byte, len(p))
+	go func() {
+		defer plaintext.Close()
+		defer pw.Close()
 
-	n, _ = e.plaintext.Read(p2)
-	if n == 0 {
-		if !e.plaintextReadZero {
-			err = e.encrypt.Close()
-			if err != nil {
-				return
-			}
-
-			err = e.armored.Close()
-			if err != nil {
-				return
-			}
-
-			e.plaintextReadZero = true
+		config := &packet.Config{
+			DefaultCipher: packet.CipherAES256,
+			Time:          time.Now,
+		}
+		hints := &openpgp.FileHints{
+			IsBinary: true,
+			FileName: "",
+			ModTime:  time.Now().UTC(),
 		}
 
-		return e.buffer.Read(p)
-	}
+		armored, err := armor.Encode(pw, constants.PGPMessageHeader, nil)
+		if err != nil {
+			_ = pw.CloseWithError(err)
+			return
+		}
 
-	return e.buffer.Read(p)
-}
+		encryptWriter, err := openpgp.SymmetricallyEncrypt(armored, password, hints, config)
+		if err != nil {
+			_ = pw.CloseWithError(err)
+			return
+		}
 
-func (e *encryptWrapperReader) Close() error {
-	return nil
-}
+		if _, err := io.Copy(encryptWriter, plaintext); err != nil {
+			_ = pw.CloseWithError(err)
+			return
+		}
+		if err := encryptWriter.Close(); err != nil {
+			_ = pw.CloseWithError(err)
+			return
+		}
+		if err := armored.Close(); err != nil {
+			_ = pw.CloseWithError(err)
+			return
+		}
+	}()
 
-func NewEncryptWrapperReader(plaintext io.Reader, armored, encrypt io.WriteCloser, buffer io.ReadWriter) io.ReadCloser {
-	return &encryptWrapperReader{
-		plaintext: io.TeeReader(plaintext, encrypt),
-		encrypt:   encrypt,
-		armored:   armored,
-		buffer:    buffer,
-	}
-}
-
-func encrypt(plaintext io.ReadCloser, password []byte) (ciphertext io.ReadCloser, err error) {
-	bufferReadWriter := new(bytes.Buffer)
-	armored, err := armor.Encode(bufferReadWriter, constants.PGPMessageHeader, nil)
-	if err != nil {
-		return
-	}
-	config := &packet.Config{
-		DefaultCipher: packet.CipherAES256,
-		Time:          time.Now,
-	}
-
-	hints := &openpgp.FileHints{
-		IsBinary: true,
-		FileName: "",
-		ModTime:  time.Unix(time.Now().Unix(), 0),
-	}
-
-	encryptWriter, err := openpgp.SymmetricallyEncrypt(armored, password, hints, config)
-	if err != nil {
-		return
-	}
-
-	ciphertext = NewEncryptWrapperReader(plaintext, armored, encryptWriter, bufferReadWriter)
-
-	return
+	return pr, nil
 }
 
 func healthHandler(w http.ResponseWriter, _ *http.Request) {
@@ -240,14 +213,17 @@ func (s *Server) previewHandler(w http.ResponseWriter, r *http.Request) {
 	var templatePath string
 	var content htmlTemplate.HTML
 
-	switch {
-	case strings.HasPrefix(contentType, "image/"):
-		templatePath = "download.image.html"
-	case strings.HasPrefix(contentType, "video/"):
-		templatePath = "download.video.html"
-	case strings.HasPrefix(contentType, "audio/"):
-		templatePath = "download.audio.html"
-	case strings.HasPrefix(contentType, "text/"):
+	if metadata.Compressed {
+		templatePath = "download.html"
+	} else {
+		switch {
+		case strings.HasPrefix(contentType, "image/"):
+			templatePath = "download.image.html"
+		case strings.HasPrefix(contentType, "video/"):
+			templatePath = "download.video.html"
+		case strings.HasPrefix(contentType, "audio/"):
+			templatePath = "download.audio.html"
+		case strings.HasPrefix(contentType, "text/"):
 		templatePath = "download.markdown.html"
 
 		var reader io.ReadCloser
@@ -273,8 +249,9 @@ func (s *Server) previewHandler(w http.ResponseWriter, r *http.Request) {
 			templatePath = "download.sandbox.html"
 		}
 
-	default:
-		templatePath = "download.html"
+		default:
+			templatePath = "download.html"
+		}
 	}
 
 	relativeURL, _ := url.Parse(path.Join(s.proxyPath, token, filename))
@@ -937,11 +914,10 @@ func (s *Server) checkMetadata(ctx context.Context, token, filename string, incr
 	var metadata metadata
 
 	r, _, err := s.storage.Get(ctx, token, fmt.Sprintf("%s.metadata", filename), nil)
-	defer storage.CloseCheck(r)
-
 	if err != nil {
 		return metadata, err
 	}
+	defer storage.CloseCheck(r)
 
 	if err := json.NewDecoder(r).Decode(&metadata); err != nil {
 		return metadata, err
@@ -970,17 +946,16 @@ func (s *Server) checkDeletionToken(ctx context.Context, deletionToken, token, f
 	var metadata metadata
 
 	r, _, err := s.storage.Get(ctx, token, fmt.Sprintf("%s.metadata", filename), nil)
-	defer storage.CloseCheck(r)
-
 	if s.storage.IsNotExist(err) {
 		return errors.New("metadata doesn't exist")
 	} else if err != nil {
 		return err
 	}
+	defer storage.CloseCheck(r)
 
 	if err := json.NewDecoder(r).Decode(&metadata); err != nil {
 		return err
-	} else if metadata.DeletionToken != deletionToken {
+	} else if subtle.ConstantTimeCompare([]byte(metadata.DeletionToken), []byte(deletionToken)) != 1 {
 		return errors.New("deletion token doesn't match")
 	}
 
@@ -996,7 +971,7 @@ func (s *Server) purgeHandler() {
 			case <-s.purgeCtx.Done():
 				return
 			case <-ticker.C:
-				err := s.storage.Purge(context.TODO(), s.purgeDays)
+				err := s.storage.Purge(s.purgeCtx, s.purgeDays)
 				if err != nil {
 					s.logger.Printf("error cleaning up expired files: %v", err)
 				}
@@ -1044,8 +1019,13 @@ func (s *Server) zipHandler(w http.ResponseWriter, r *http.Request) {
 	for _, key := range strings.Split(files, ",") {
 		key = resolveKey(key, s.proxyPath)
 
-		token := strings.Split(key, "/")[0]
-		filename := sanitize(strings.Split(key, "/")[1])
+		parts := strings.SplitN(key, "/", 2)
+		if len(parts) != 2 {
+			s.logger.Printf("invalid file spec in zip: %q", key)
+			continue
+		}
+		token := parts[0]
+		filename := sanitize(parts[1])
 
 		if _, err := s.checkMetadata(r.Context(), token, filename, true); err != nil {
 			s.logger.Printf("Error metadata: %s", err.Error())
@@ -1053,8 +1033,6 @@ func (s *Server) zipHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		reader, _, err := s.storage.Get(r.Context(), token, filename, nil)
-		defer storage.CloseCheck(reader)
-
 		if err != nil {
 			if s.storage.IsNotExist(err) {
 				http.Error(w, "File not found", 404)
@@ -1067,21 +1045,22 @@ func (s *Server) zipHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		header := &zip.FileHeader{
-			Name:   strings.Split(key, "/")[1],
-			Method: zip.Store,
-
+			Name:     filename,
+			Method:   zip.Store,
 			Modified: time.Now().UTC(),
 		}
 
 		fw, err := zw.CreateHeader(header)
-
 		if err != nil {
+			storage.CloseCheck(reader)
 			s.logger.Printf("%s", err.Error())
 			http.Error(w, "Internal server error.", http.StatusInternalServerError)
 			return
 		}
 
-		if _, err = io.Copy(fw, reader); err != nil {
+		_, err = io.Copy(fw, reader)
+		storage.CloseCheck(reader)
+		if err != nil {
 			s.logger.Printf("%s", err.Error())
 			http.Error(w, "Internal server error.", http.StatusInternalServerError)
 			return
@@ -1114,8 +1093,13 @@ func (s *Server) tarGzHandler(w http.ResponseWriter, r *http.Request) {
 	for _, key := range strings.Split(files, ",") {
 		key = resolveKey(key, s.proxyPath)
 
-		token := strings.Split(key, "/")[0]
-		filename := sanitize(strings.Split(key, "/")[1])
+		parts := strings.SplitN(key, "/", 2)
+		if len(parts) != 2 {
+			s.logger.Printf("invalid file spec in tar.gz: %q", key)
+			continue
+		}
+		token := parts[0]
+		filename := sanitize(parts[1])
 
 		if _, err := s.checkMetadata(r.Context(), token, filename, true); err != nil {
 			s.logger.Printf("Error metadata: %s", err.Error())
@@ -1123,8 +1107,6 @@ func (s *Server) tarGzHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		reader, contentLength, err := s.storage.Get(r.Context(), token, filename, nil)
-		defer storage.CloseCheck(reader)
-
 		if err != nil {
 			if s.storage.IsNotExist(err) {
 				http.Error(w, "File not found", 404)
@@ -1137,18 +1119,21 @@ func (s *Server) tarGzHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		header := &tar.Header{
-			Name: strings.Split(key, "/")[1],
+			Name: filename,
 			Size: int64(contentLength),
 		}
 
 		err = zw.WriteHeader(header)
 		if err != nil {
+			storage.CloseCheck(reader)
 			s.logger.Printf("%s", err.Error())
 			http.Error(w, "Internal server error.", http.StatusInternalServerError)
 			return
 		}
 
-		if _, err = io.Copy(zw, reader); err != nil {
+		_, err = io.Copy(zw, reader)
+		storage.CloseCheck(reader)
+		if err != nil {
 			s.logger.Printf("%s", err.Error())
 			http.Error(w, "Internal server error.", http.StatusInternalServerError)
 			return
@@ -1172,8 +1157,13 @@ func (s *Server) tarHandler(w http.ResponseWriter, r *http.Request) {
 	for _, key := range strings.Split(files, ",") {
 		key = resolveKey(key, s.proxyPath)
 
-		token := strings.Split(key, "/")[0]
-		filename := strings.Split(key, "/")[1]
+		parts := strings.SplitN(key, "/", 2)
+		if len(parts) != 2 {
+			s.logger.Printf("invalid file spec in tar: %q", key)
+			continue
+		}
+		token := parts[0]
+		filename := sanitize(parts[1])
 
 		if _, err := s.checkMetadata(r.Context(), token, filename, true); err != nil {
 			s.logger.Printf("Error metadata: %s", err.Error())
@@ -1181,8 +1171,6 @@ func (s *Server) tarHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		reader, contentLength, err := s.storage.Get(r.Context(), token, filename, nil)
-		defer storage.CloseCheck(reader)
-
 		if err != nil {
 			if s.storage.IsNotExist(err) {
 				http.Error(w, "File not found", 404)
@@ -1195,18 +1183,21 @@ func (s *Server) tarHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		header := &tar.Header{
-			Name: strings.Split(key, "/")[1],
+			Name: filename,
 			Size: int64(contentLength),
 		}
 
 		err = zw.WriteHeader(header)
 		if err != nil {
+			storage.CloseCheck(reader)
 			s.logger.Printf("%s", err.Error())
 			http.Error(w, "Internal server error.", http.StatusInternalServerError)
 			return
 		}
 
-		if _, err = io.Copy(zw, reader); err != nil {
+		_, err = io.Copy(zw, reader)
+		storage.CloseCheck(reader)
+		if err != nil {
 			s.logger.Printf("%s", err.Error())
 			http.Error(w, "Internal server error.", http.StatusInternalServerError)
 			return

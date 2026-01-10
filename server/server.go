@@ -27,7 +27,7 @@ import (
 	"github.com/tg123/go-htpasswd"
 	"golang.org/x/crypto/acme/autocert"
 
-	assetfs "github.com/elazarl/go-bindata-assetfs"
+	"io/fs"
 	"github.com/morawskidotmy/transfer.ng/server/storage"
 	web "github.com/morawskidotmy/transfer.ng/web"
 )
@@ -685,6 +685,7 @@ func registerMimeTypes() {
 
 func (s *Server) Run() {
 	listening := false
+	var servers []*http.Server
 
 	if s.profilerEnabled {
 		listening = true
@@ -744,13 +745,14 @@ func (s *Server) Run() {
 		listening = true
 		s.logger.Printf("starting to listen on: %v\n", s.ListenerString)
 
-		go func() {
-			srvr := &http.Server{
-				Addr:    s.ListenerString,
-				Handler: h,
-			}
+		httpSrv := &http.Server{
+			Addr:    s.ListenerString,
+			Handler: h,
+		}
+		servers = append(servers, httpSrv)
 
-			if err := srvr.ListenAndServe(); err != nil {
+		go func() {
+			if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				s.logger.Fatal(err)
 			}
 		}()
@@ -760,14 +762,15 @@ func (s *Server) Run() {
 		listening = true
 		s.logger.Printf("starting to listen for TLS on: %v\n", s.TLSListenerString)
 
-		go func() {
-			srvr := &http.Server{
-				Addr:      s.TLSListenerString,
-				Handler:   h,
-				TLSConfig: s.tlsConfig,
-			}
+		tlsSrv := &http.Server{
+			Addr:      s.TLSListenerString,
+			Handler:   h,
+			TLSConfig: s.tlsConfig,
+		}
+		servers = append(servers, tlsSrv)
 
-			if err := srvr.ListenAndServeTLS("", ""); err != nil {
+		go func() {
+			if err := tlsSrv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				s.logger.Fatal(err)
 			}
 		}()
@@ -791,7 +794,16 @@ func (s *Server) Run() {
 		s.logger.Printf("No listener active.")
 	}
 
+	s.logger.Printf("Shutting down...")
 	s.purgeCancel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, srv := range servers {
+		if err := srv.Shutdown(ctx); err != nil {
+			s.logger.Printf("server shutdown error: %v", err)
+		}
+	}
 
 	if s.logFile != nil {
 		s.logFile.Close()
@@ -802,22 +814,27 @@ func (s *Server) Run() {
 
 func (s *Server) loadTemplatesFromPath() {
 	s.htmlTemplatesMutex.Lock()
-	s.htmlTemplates, _ = s.htmlTemplates.ParseGlob(filepath.Join(s.webPath, "*.html"))
+	if t, err := s.htmlTemplates.ParseGlob(filepath.Join(s.webPath, "*.html")); err != nil {
+		s.logger.Fatalf("failed to parse html templates: %v", err)
+	} else {
+		s.htmlTemplates = t
+	}
 	s.htmlTemplatesMutex.Unlock()
 	s.textTemplatesMutex.Lock()
-	s.textTemplates, _ = s.textTemplates.ParseGlob(filepath.Join(s.webPath, "*.txt"))
+	if t, err := s.textTemplates.ParseGlob(filepath.Join(s.webPath, "*.txt")); err != nil {
+		s.logger.Fatalf("failed to parse text templates: %v", err)
+	} else {
+		s.textTemplates = t
+	}
 	s.textTemplatesMutex.Unlock()
 }
 
 func (s *Server) createAssetFS() http.FileSystem {
-	return &assetfs.AssetFS{
-		Asset:    web.Asset,
-		AssetDir: web.AssetDir,
-		AssetInfo: func(path string) (os.FileInfo, error) {
-			return os.Stat(path)
-		},
-		Prefix: web.Prefix,
+	sub, err := fs.Sub(web.FS, ".")
+	if err != nil {
+		s.logger.Fatalf("Unable to create sub filesystem: %v", err)
 	}
+	return http.FS(sub)
 }
 
 func (s *Server) loadTemplatesFromAssets() {
@@ -890,8 +907,8 @@ func (s *Server) previewMatcher(r *http.Request, rm *mux.RouteMatch) bool {
 	}
 	u, err := url.Parse(r.Referer())
 	if err != nil {
-		s.logger.Fatal(err)
-		return false
+		s.logger.Printf("invalid referer %q: %v", r.Referer(), err)
+		return true
 	}
 	return u.Path != r.URL.Path
 }
