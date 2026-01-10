@@ -27,22 +27,22 @@ func (s *Server) scanHandler(w http.ResponseWriter, r *http.Request) {
 	file, err := os.CreateTemp(s.tempPath, "clamav-")
 	defer s.cleanTmpFile(file)
 	if err != nil {
-		s.logger.Printf("%s", err.Error())
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.logger.Printf("clamav: failed to create temp file: %v", err)
+		http.Error(w, "Could not process scan.", http.StatusInternalServerError)
 		return
 	}
 
 	_, err = io.Copy(file, r.Body)
 	if err != nil {
-		s.logger.Printf("%s", err.Error())
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.logger.Printf("clamav: failed to copy file: %v", err)
+		http.Error(w, "Could not process scan.", http.StatusInternalServerError)
 		return
 	}
 
 	status, err := s.performScan(file.Name())
 	if err != nil {
-		s.logger.Printf("%s", err.Error())
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.logger.Printf("clamav: scan failed: %v", err)
+		http.Error(w, "Could not scan file.", http.StatusInternalServerError)
 		return
 	}
 

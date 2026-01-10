@@ -228,16 +228,19 @@ func (s *Server) previewHandler(w http.ResponseWriter, r *http.Request) {
 
 		var reader io.ReadCloser
 		if reader, _, err = s.storage.Get(r.Context(), token, filename, nil); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.logger.Printf("preview: failed to get %s/%s: %v", token, filename, err)
+			http.Error(w, "Could not retrieve file.", http.StatusInternalServerError)
 			return
 		}
+		defer storage.CloseCheck(reader)
 
-		var data []byte
-		data = make([]byte, _5M)
-		if _, err = reader.Read(data); err != io.EOF && err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		buf := &bytes.Buffer{}
+		if _, err = io.CopyN(buf, reader, _5M); err != nil && !errors.Is(err, io.EOF) {
+			s.logger.Printf("preview: failed to read %s/%s: %v", token, filename, err)
+			http.Error(w, "Could not retrieve file.", http.StatusInternalServerError)
 			return
 		}
+		data := buf.Bytes()
 
 		if strings.HasPrefix(contentType, "text/x-markdown") || strings.HasPrefix(contentType, "text/markdown") {
 			unsafe := blackfriday.Run(data)
@@ -261,7 +264,8 @@ func (s *Server) previewHandler(w http.ResponseWriter, r *http.Request) {
 	var png []byte
 	png, err = qrcode.Encode(resolvedURL, qrcode.High, 150)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.logger.Printf("preview: failed to generate QR code: %v", err)
+		http.Error(w, "Internal server error.", http.StatusInternalServerError)
 		return
 	}
 
@@ -302,7 +306,8 @@ func (s *Server) previewHandler(w http.ResponseWriter, r *http.Request) {
 	err = s.htmlTemplates.ExecuteTemplate(w, templatePath, data)
 	s.htmlTemplatesMutex.RUnlock()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.logger.Printf("preview: failed to execute template: %v", err)
+		http.Error(w, "Internal server error.", http.StatusInternalServerError)
 		return
 	}
 
@@ -357,7 +362,8 @@ func (s *Server) viewHandler(w http.ResponseWriter, r *http.Request) {
 		err := s.htmlTemplates.ExecuteTemplate(w, "index.html", data)
 		s.htmlTemplatesMutex.RUnlock()
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.logger.Printf("view: failed to execute template: %v", err)
+			http.Error(w, "Internal server error.", http.StatusInternalServerError)
 			return
 		}
 	} else {
@@ -365,7 +371,8 @@ func (s *Server) viewHandler(w http.ResponseWriter, r *http.Request) {
 		err := s.textTemplates.ExecuteTemplate(w, "index.txt", data)
 		s.textTemplatesMutex.RUnlock()
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.logger.Printf("view: failed to execute template: %v", err)
+			http.Error(w, "Internal server error.", http.StatusInternalServerError)
 			return
 		}
 	}
@@ -376,6 +383,10 @@ func (s *Server) notFoundHandler(w http.ResponseWriter, _ *http.Request) {
 }
 
 func sanitize(fileName string) string {
+	fileName = strings.ReplaceAll(fileName, "\\", "/")
+	fileName = strings.ReplaceAll(fileName, "..", "")
+	fileName = strings.ReplaceAll(fileName, ":", "")
+
 	t := transform.Chain(
 		norm.NFD,
 		runes.Remove(runes.In(unicode.Cc)),
@@ -388,12 +399,17 @@ func sanitize(fileName string) string {
 		norm.NFC)
 	newName, _, err := transform.String(t, fileName)
 	if err != nil {
-		return path.Base(fileName)
+		newName = path.Base(fileName)
+	} else {
+		newName = path.Base(newName)
 	}
+
+	newName = strings.TrimLeft(newName, ".")
+
 	if len(newName) == 0 {
 		newName = "_"
 	}
-	return path.Base(newName)
+	return newName
 }
 
 func (s *Server) postHandler(w http.ResponseWriter, r *http.Request) {
@@ -423,8 +439,8 @@ func (s *Server) postHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	_, err := w.Write([]byte(responseBody.String()))
 	if err != nil {
-		s.logger.Printf("%s", err.Error())
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.logger.Printf("post: failed to write response: %v", err)
+		http.Error(w, "Internal server error.", http.StatusInternalServerError)
 	}
 }
 
@@ -434,8 +450,8 @@ func (s *Server) processUploadFile(w http.ResponseWriter, r *http.Request, uploa
 
 	f, err := fHeader.Open()
 	if err != nil {
-		s.logger.Printf("%s", err.Error())
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.logger.Printf("upload: failed to open file: %v", err)
+		http.Error(w, "Could not process upload.", http.StatusInternalServerError)
 		return false
 	}
 
@@ -443,8 +459,8 @@ func (s *Server) processUploadFile(w http.ResponseWriter, r *http.Request, uploa
 	defer s.cleanTmpFile(file)
 
 	if err != nil {
-		s.logger.Printf("%s", err.Error())
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.logger.Printf("upload: failed to create temp file: %v", err)
+		http.Error(w, "Could not process upload.", http.StatusInternalServerError)
 		return false
 	}
 
@@ -470,14 +486,14 @@ func (s *Server) processUploadFile(w http.ResponseWriter, r *http.Request, uploa
 func (s *Server) copyAndValidateFile(w http.ResponseWriter, file *os.File, f io.Reader) (int64, error) {
 	n, err := io.Copy(file, f)
 	if err != nil {
-		s.logger.Printf("%s", err.Error())
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.logger.Printf("upload: failed to copy file: %v", err)
+		http.Error(w, "Could not process upload.", http.StatusInternalServerError)
 		return 0, err
 	}
 
 	_, err = file.Seek(0, io.SeekStart)
 	if err != nil {
-		s.logger.Printf("%s", err.Error())
+		s.logger.Printf("upload: failed to seek file: %v", err)
 		return 0, err
 	}
 
@@ -531,8 +547,8 @@ func (s *Server) saveFileWithMetadata(w http.ResponseWriter, r *http.Request, up
 	}
 
 	if err = s.storage.Put(r.Context(), uploadToken, filename, reader, contentType, uint64(contentLength)); err != nil {
-		s.logger.Printf("Backend storage error: %s", err.Error())
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.logger.Printf("upload: backend storage error: %v", err)
+		http.Error(w, "Could not save file.", http.StatusInternalServerError)
 		return false
 	}
 
@@ -624,8 +640,8 @@ func (s *Server) putHandler(w http.ResponseWriter, r *http.Request) {
 		file, err := os.CreateTemp(s.tempPath, "transfer-")
 		defer s.cleanTmpFile(file)
 		if err != nil {
-			s.logger.Printf("%s", err.Error())
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.logger.Printf("put: failed to create temp file: %v", err)
+			http.Error(w, "Could not process upload.", http.StatusInternalServerError)
 			return
 		}
 
@@ -664,15 +680,15 @@ func (s *Server) putHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) bufferFileToTemp(w http.ResponseWriter, file *os.File, requestBody io.Reader) (int64, error) {
 	n, err := io.Copy(file, requestBody)
 	if err != nil {
-		s.logger.Printf("%s", err.Error())
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.logger.Printf("put: failed to buffer file: %v", err)
+		http.Error(w, "Could not process upload.", http.StatusInternalServerError)
 		return 0, err
 	}
 
 	_, err = file.Seek(0, io.SeekStart)
 	if err != nil {
-		s.logger.Printf("%s", err.Error())
-		http.Error(w, "Cannot reset cache file", http.StatusInternalServerError)
+		s.logger.Printf("put: failed to seek file: %v", err)
+		http.Error(w, "Could not process upload.", http.StatusInternalServerError)
 		return 0, err
 	}
 
@@ -1009,7 +1025,7 @@ func (s *Server) zipHandler(w http.ResponseWriter, r *http.Request) {
 
 	files := vars["files"]
 
-	zipfilename := fmt.Sprintf("transfersh-%d.zip", uint16(time.Now().UnixNano()))
+	zipfilename := fmt.Sprintf("transfersh-%d.zip", time.Now().UnixNano())
 
 	w.Header().Set("Content-Type", "application/zip")
 	commonHeader(w, zipfilename)
@@ -1079,7 +1095,7 @@ func (s *Server) tarGzHandler(w http.ResponseWriter, r *http.Request) {
 
 	files := vars["files"]
 
-	tarfilename := fmt.Sprintf("transfersh-%d.tar.gz", uint16(time.Now().UnixNano()))
+	tarfilename := fmt.Sprintf("transfersh-%d.tar.gz", time.Now().UnixNano())
 
 	w.Header().Set("Content-Type", "application/x-gzip")
 	commonHeader(w, tarfilename)
@@ -1146,7 +1162,7 @@ func (s *Server) tarHandler(w http.ResponseWriter, r *http.Request) {
 
 	files := vars["files"]
 
-	tarfilename := fmt.Sprintf("transfersh-%d.tar", uint16(time.Now().UnixNano()))
+	tarfilename := fmt.Sprintf("transfersh-%d.tar", time.Now().UnixNano())
 
 	w.Header().Set("Content-Type", "application/x-tar")
 	commonHeader(w, tarfilename)
@@ -1423,6 +1439,16 @@ func ipFilterHandler(h http.Handler, ipFilterOptions *IPFilterOptions) http.Hand
 		} else {
 			WrapIPFilter(h, ipFilterOptions).ServeHTTP(w, r)
 		}
+	}
+}
+
+func securityHeadersHandler(h http.Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("X-XSS-Protection", "1; mode=block")
+		h.ServeHTTP(w, r)
 	}
 }
 
