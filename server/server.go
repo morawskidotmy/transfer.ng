@@ -729,16 +729,18 @@ func (s *Server) Run() {
 		}
 	}
 
-	h := handlers.PanicHandler(
-		ipFilterHandler(
-			handlers.LogHandler(
-				LoveHandler(
-					s.RedirectHandler(cors(r))),
-				handlers.NewLogOptions(s.logger.Printf, "_default_"),
+	h := securityHeadersHandler(
+		handlers.PanicHandler(
+			ipFilterHandler(
+				handlers.LogHandler(
+					LoveHandler(
+						s.RedirectHandler(cors(r))),
+					handlers.NewLogOptions(s.logger.Printf, "_default_"),
+				),
+				s.ipFilterOptions,
 			),
-			s.ipFilterOptions,
+			nil,
 		),
-		nil,
 	)
 
 	if !s.TLSListenerOnly {

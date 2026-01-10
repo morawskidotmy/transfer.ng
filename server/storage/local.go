@@ -79,20 +79,21 @@ func (s *LocalStorage) Delete(_ context.Context, token string, filename string) 
 	return
 }
 
-// Purge cleans up the storage
 func (s *LocalStorage) Purge(_ context.Context, days time.Duration) (err error) {
 	err = filepath.Walk(s.basedir,
-		func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return err
+		func(path string, info os.FileInfo, walkErr error) error {
+			if walkErr != nil {
+				s.logger.Printf("purge: walk error for %s: %v", path, walkErr)
+				return nil
 			}
 			if info.IsDir() {
 				return nil
 			}
 
 			if info.ModTime().Before(time.Now().Add(-1 * days)) {
-				err = os.Remove(path)
-				return err
+				if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+					s.logger.Printf("purge: failed to remove %s: %v", path, rmErr)
+				}
 			}
 
 			return nil

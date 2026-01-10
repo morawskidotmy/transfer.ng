@@ -21,14 +21,18 @@ func (s *Server) virusTotalHandler(w http.ResponseWriter, r *http.Request) {
 
 	vt, err := virustotal.NewVirusTotal(s.VirusTotalKey)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.logger.Printf("virustotal: failed to create client: %v", err)
+		http.Error(w, "Could not connect to VirusTotal.", http.StatusInternalServerError)
+		return
 	}
 
 	reader := r.Body
 
 	result, err := vt.Scan(filename, reader)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.logger.Printf("virustotal: scan failed: %v", err)
+		http.Error(w, "Could not scan file.", http.StatusInternalServerError)
+		return
 	}
 
 	s.logger.Println(result)
