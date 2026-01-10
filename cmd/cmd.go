@@ -152,7 +152,7 @@ var globalFlags = []cli.Flag{
 	},
 	&cli.StringFlag{
 		Name:    "provider",
-		Usage:   "s3|gdrive|local",
+		Usage:   "s3|gdrive|storj|local",
 		Value:   "",
 		EnvVars: []string{"PROVIDER"},
 	},

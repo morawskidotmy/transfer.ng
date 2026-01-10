@@ -1,0 +1,15 @@
+- fixed previewmatcher crash by replacing fatal with printf for malformed referer headers
+- fixed resource leaks in zip/tar/tar.gz handlers by moving defer outside loops
+- fixed panic risk by using splitn with length check instead of direct index access
+- fixed encryption memory issue by replacing buffer-all approach with streaming io.pipe
+- fixed nil reader defer by moving defer after error check in checkmetadata and checkdeletiontoken
+- added path sanitization to tarhandler
+- implemented graceful http shutdown with 10s timeout on sigterm
+- replaced go-bindata-assetfs with go embed using standard library
+- compressed files now skip media preview and show download page instead
+- purgehandler now uses purge context instead of context.todo
+- template parsing errors now properly reported instead of silently ignored
+- deletion token comparison now uses constant-time compare for security
+- stripprefix now uses trimprefix instead of replace
+- cli provider usage string now includes storj option
+- updated manifest.json with new repository link

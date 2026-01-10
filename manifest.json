@@ -1,7 +1,7 @@
 {
     "dependencies": {
-        "github.com/dutchcoders/transfer.sh-web": {
-            "branch": "master"
+        "github.com/morawskidotmy/transfer.ng": {
+            "branch": "main"
         }
     }
 }
