@@ -4,6 +4,20 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{.Filename}}</title>
+  <meta property="og:type" content="video.other">
+  <meta property="og:title" content="{{.Filename}}">
+  <meta property="og:description" content="{{.Filename}} - {{.ContentLength}} bytes">
+  <meta property="og:video" content="{{.URLGet}}">
+  <meta property="og:video:secure_url" content="{{.URLGet}}">
+  <meta property="og:video:type" content="{{.ContentType}}">
+  <meta property="og:url" content="{{.URL}}">
+  <meta property="og:site_name" content="{{.Hostname}}">
+  <meta name="twitter:card" content="player">
+  <meta name="twitter:title" content="{{.Filename}}">
+  <meta name="twitter:description" content="{{.Filename}} - {{.ContentLength}} bytes">
+  <meta name="twitter:player" content="{{.URL}}">
+  <meta name="twitter:player:stream" content="{{.URLGet}}">
+  <meta name="twitter:player:stream:content_type" content="{{.ContentType}}">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { 

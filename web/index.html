@@ -4,6 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{.Hostname}} - File Sharing</title>
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="{{.Hostname}} - File Sharing">
+  <meta property="og:description" content="Secure file sharing service. Upload and share files easily.">
+  <meta property="og:url" content="{{.WebAddress}}">
+  <meta property="og:site_name" content="{{.Hostname}}">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="{{.Hostname}} - File Sharing">
+  <meta name="twitter:description" content="Secure file sharing service. Upload and share files easily.">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { 
@@ -202,7 +210,6 @@
     </div>
 
     <div class="grid">
-      <!-- UPLOAD SECTION -->
       <div class="section">
         <div class="section-header">
           <div class="section-icon">↑</div>
@@ -237,7 +244,6 @@ curl --upload-file ./file2.txt {{.WebAddress}}file2.txt</pre>
   -H "Max-Days: 14"</pre>
       </div>
 
-      <!-- DOWNLOAD SECTION -->
       <div class="section">
         <div class="section-header">
           <div class="section-icon">↓</div>
@@ -278,7 +284,6 @@ curl --upload-file ./file2.txt {{.WebAddress}}file2.txt</pre>
       </div>
     </div>
 
-    <!-- OPTIONS SECTION -->
     <div class="section">
       <div class="section-header">
         <div class="section-icon">⚙</div>
@@ -319,7 +324,6 @@ curl --upload-file ./file2.txt {{.WebAddress}}file2.txt</pre>
   -H "X-Encrypt-Password: secure123"</pre>
     </div>
 
-    <!-- HEADERS REFERENCE -->
     <div class="grid">
       <div class="section">
         <div class="section-header">

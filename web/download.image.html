@@ -4,6 +4,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{.Filename}}</title>
+  <meta property="og:type" content="image">
+  <meta property="og:title" content="{{.Filename}}">
+  <meta property="og:description" content="{{.Filename}} - {{.ContentLength}} bytes">
+  <meta property="og:image" content="{{.URLGet}}">
+  <meta property="og:image:type" content="{{.ContentType}}">
+  <meta property="og:image:secure_url" content="{{.URLGet}}">
+  <meta property="og:url" content="{{.URL}}">
+  <meta property="og:site_name" content="{{.Hostname}}">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{.Filename}}">
+  <meta name="twitter:description" content="{{.Filename}} - {{.ContentLength}} bytes">
+  <meta name="twitter:image" content="{{.URLGet}}">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { 

@@ -252,12 +252,30 @@ func (s *Server) getTextContent(ctx context.Context, token, filename, contentTyp
 	return "", "download.sandbox.html", nil
 }
 
+func isBotUserAgent(userAgent string) bool {
+	ua := strings.ToLower(userAgent)
+	return strings.Contains(ua, "whatsapp") ||
+		strings.Contains(ua, "discordbot") ||
+		strings.Contains(ua, "telegrambot") ||
+		strings.Contains(ua, "twitterbot") ||
+		strings.Contains(ua, "facebookexternalhit") ||
+		strings.Contains(ua, "linkedinbot") ||
+		strings.Contains(ua, "slackbot") ||
+		strings.Contains(ua, "embedly")
+}
+
 func (s *Server) previewHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Vary", "Accept, Range, Referer, X-Decrypt-Password")
+	w.Header().Set("Vary", "Accept, Range, Referer, X-Decrypt-Password, User-Agent")
 
 	vars := mux.Vars(r)
 	token := vars["token"]
 	filename := vars["filename"]
+
+	if isBotUserAgent(r.Header.Get("User-Agent")) {
+		vars["action"] = "inline"
+		s.getHandler(w, r)
+		return
+	}
 
 	if err := validateTokenAndFilename(token, filename); err != nil {
 		s.respondError(w, http.StatusBadRequest, err.Error(), "")
