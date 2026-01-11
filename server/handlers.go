@@ -97,7 +97,7 @@ func (r *readerWithCloser) Close() error {
 func decrypt(ciphertext io.ReadCloser, password []byte) (io.ReadCloser, error) {
 	unarmored, err := armor.Decode(ciphertext)
 	if err != nil {
-		ciphertext.Close()
+		_ = ciphertext.Close()
 		return nil, err
 	}
 
@@ -117,7 +117,7 @@ func decrypt(ciphertext io.ReadCloser, password []byte) (io.ReadCloser, error) {
 	var emptyKeyRing openpgp.EntityList
 	md, err := openpgp.ReadMessage(unarmored.Body, emptyKeyRing, prompt, config)
 	if err != nil {
-		ciphertext.Close()
+		_ = ciphertext.Close()
 		return nil, err
 	}
 
@@ -253,7 +253,7 @@ func (s *Server) getTextContent(ctx context.Context, token, filename, contentTyp
 }
 
 func (s *Server) previewHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Vary", "Range, Referer, X-Decrypt-Password")
+	w.Header().Set("Vary", "Accept, Range, Referer, X-Decrypt-Password")
 
 	vars := mux.Vars(r)
 	token := vars["token"]
@@ -1300,7 +1300,7 @@ func (s *Server) headHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "close")
 	w.Header().Set("X-Remaining-Downloads", remainingDownloads)
 	w.Header().Set("X-Remaining-Days", remainingDays)
-	w.Header().Set("Vary", "Range, Referer, X-Decrypt-Password")
+	w.Header().Set("Vary", "Accept, Range, Referer, X-Decrypt-Password")
 
 	if s.storage.IsRangeSupported() {
 		w.Header().Set("Accept-Ranges", "bytes")
@@ -1360,7 +1360,7 @@ func (s *Server) getHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Length", strconv.FormatUint(contentLength, 10))
-	w.Header().Set("Vary", "Range, Referer, X-Decrypt-Password")
+	w.Header().Set("Vary", "Accept, Range, Referer, X-Decrypt-Password")
 
 	if rng != nil && rng.ContentRange() != "" {
 		w.WriteHeader(http.StatusPartialContent)

@@ -42,7 +42,7 @@ func TestLocalStorage_PutAndGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	if contentLength != uint64(len(content)) {
 		t.Errorf("expected content length %d, got %d", len(content), contentLength)
@@ -153,7 +153,7 @@ func TestLocalStorage_GetWithRange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get with range failed: %v", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	if contentLength != 5 {
 		t.Errorf("expected content length 5, got %d", contentLength)
