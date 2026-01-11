@@ -30,11 +30,31 @@ DOWNLOAD ENCRYPTED FILE
 curl {{.WebAddress}}get/TOKEN/filename \
   -H "X-Decrypt-Password: secret" -o filename
 
-UPLOAD OPTIONS
-==============
-Max-Downloads: Limit download count (e.g., 1 for single download)
-Max-Days:      Auto-delete after N days
-X-Encrypt-Password: Encrypt file with password
+REQUEST HEADERS
+===============
+Max-Downloads:      limit download count before deletion
+Max-Days:           days until file expires
+X-Encrypt-Password: encrypt file with aes256 on upload
+X-Decrypt-Password: decrypt file on download
+X-Deletion-Token:   token to delete file (header alternative)
+Range:              request partial content (bytes=0-1023)
+
+RESPONSE HEADERS
+================
+X-Url-Delete:          full url to delete the file
+X-Remaining-Downloads: downloads left before expiry
+X-Remaining-Days:      days left before expiry
+Content-Disposition:   attachment or inline with filename
+Content-Range:         byte range for partial content
+Accept-Ranges:         indicates byte range support
+
+DELETE FILE
+===========
+curl -X DELETE {{.WebAddress}}TOKEN/filename/DELETION_TOKEN
+
+or using header:
+curl -X DELETE {{.WebAddress}}TOKEN/filename \
+  -H "X-Deletion-Token: DELETION_TOKEN"
 
 ====================================================
 Made by DutchCoders & morawskidotmy | transfer.ng

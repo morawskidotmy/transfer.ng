@@ -2,6 +2,7 @@ package server
 
 import (
 	cryptoRand "crypto/rand"
+	"encoding/binary"
 	"strings"
 )
 
@@ -13,13 +14,22 @@ func token(length int) (string, error) {
 	var builder strings.Builder
 	builder.Grow(length)
 
-	b := make([]byte, length)
-	if _, err := cryptoRand.Read(b); err != nil {
-		return "", err
-	}
+	symbolsLen := uint32(len(SYMBOLS))
+	maxValid := (0xFFFFFFFF / symbolsLen) * symbolsLen
 
 	for i := 0; i < length; i++ {
-		builder.WriteByte(SYMBOLS[b[i]%byte(len(SYMBOLS))])
+		var val uint32
+		for {
+			b := make([]byte, 4)
+			if _, err := cryptoRand.Read(b); err != nil {
+				return "", err
+			}
+			val = binary.BigEndian.Uint32(b)
+			if val < maxValid {
+				break
+			}
+		}
+		builder.WriteByte(SYMBOLS[val%symbolsLen])
 	}
 
 	return builder.String(), nil

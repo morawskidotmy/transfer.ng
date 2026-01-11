@@ -319,6 +319,73 @@ curl --upload-file ./file2.txt {{.WebAddress}}file2.txt</pre>
   -H "X-Encrypt-Password: secure123"</pre>
     </div>
 
+    <!-- HEADERS REFERENCE -->
+    <div class="grid">
+      <div class="section">
+        <div class="section-header">
+          <div class="section-icon">→</div>
+          <div style="font-weight: bold; font-size: 1.05em;">REQUEST HEADERS</div>
+        </div>
+
+        <div class="option-item">
+          <span class="option-name">Max-Downloads:</span>
+          <span class="option-desc">limit download count before deletion</span>
+        </div>
+        <div class="option-item">
+          <span class="option-name">Max-Days:</span>
+          <span class="option-desc">days until file expires</span>
+        </div>
+        <div class="option-item">
+          <span class="option-name">X-Encrypt-Password:</span>
+          <span class="option-desc">encrypt file with aes256 on upload</span>
+        </div>
+        <div class="option-item">
+          <span class="option-name">X-Decrypt-Password:</span>
+          <span class="option-desc">decrypt file on download</span>
+        </div>
+        <div class="option-item">
+          <span class="option-name">X-Deletion-Token:</span>
+          <span class="option-desc">token to delete file (header alternative)</span>
+        </div>
+        <div class="option-item">
+          <span class="option-name">Range:</span>
+          <span class="option-desc">request partial content (bytes=0-1023)</span>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-header">
+          <div class="section-icon">←</div>
+          <div style="font-weight: bold; font-size: 1.05em;">RESPONSE HEADERS</div>
+        </div>
+
+        <div class="option-item">
+          <span class="option-name">X-Url-Delete:</span>
+          <span class="option-desc">full url to delete the file</span>
+        </div>
+        <div class="option-item">
+          <span class="option-name">X-Remaining-Downloads:</span>
+          <span class="option-desc">downloads left before expiry</span>
+        </div>
+        <div class="option-item">
+          <span class="option-name">X-Remaining-Days:</span>
+          <span class="option-desc">days left before expiry</span>
+        </div>
+        <div class="option-item">
+          <span class="option-name">Content-Disposition:</span>
+          <span class="option-desc">attachment or inline with filename</span>
+        </div>
+        <div class="option-item">
+          <span class="option-name">Content-Range:</span>
+          <span class="option-desc">byte range for partial content</span>
+        </div>
+        <div class="option-item">
+          <span class="option-name">Accept-Ranges:</span>
+          <span class="option-desc">indicates byte range support</span>
+        </div>
+      </div>
+    </div>
+
     {{if .EmailContact}}
     <div class="section" style="text-align: center; padding: 20px;">
       <div style="font-size: 0.9em;">

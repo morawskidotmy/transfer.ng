@@ -27,9 +27,9 @@ import (
 	"github.com/tg123/go-htpasswd"
 	"golang.org/x/crypto/acme/autocert"
 
-	"io/fs"
 	"github.com/morawskidotmy/transfer.ng/server/storage"
 	web "github.com/morawskidotmy/transfer.ng/web"
+	"io/fs"
 )
 
 // parse request with maximum memory of _24Kilobits
@@ -198,14 +198,18 @@ func RandomTokenLength(length int) OptionFn {
 	}
 }
 
-// CompressionThreshold sets compression threshold
 func CompressionThreshold(bytes int64) OptionFn {
 	return func(srvr *Server) {
 		srvr.compressionThreshold = bytes
 	}
 }
 
-// Purge sets purge days and option
+func MaxArchiveFiles(count int) OptionFn {
+	return func(srvr *Server) {
+		srvr.maxArchiveFiles = count
+	}
+}
+
 func Purge(days, interval int) OptionFn {
 	return func(srvr *Server) {
 		srvr.purgeDays = time.Duration(days) * time.Hour * 24
@@ -381,6 +385,7 @@ type Server struct {
 	textTemplatesMutex sync.RWMutex
 
 	compressionThreshold int64
+	maxArchiveFiles      int
 }
 
 // New is the factory fot Server
@@ -748,8 +753,12 @@ func (s *Server) Run() {
 		s.logger.Printf("starting to listen on: %v\n", s.ListenerString)
 
 		httpSrv := &http.Server{
-			Addr:    s.ListenerString,
-			Handler: h,
+			Addr:              s.ListenerString,
+			Handler:           h,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       5 * time.Minute,
+			WriteTimeout:      10 * time.Minute,
+			IdleTimeout:       2 * time.Minute,
 		}
 		servers = append(servers, httpSrv)
 
@@ -765,9 +774,13 @@ func (s *Server) Run() {
 		s.logger.Printf("starting to listen for TLS on: %v\n", s.TLSListenerString)
 
 		tlsSrv := &http.Server{
-			Addr:      s.TLSListenerString,
-			Handler:   h,
-			TLSConfig: s.tlsConfig,
+			Addr:              s.TLSListenerString,
+			Handler:           h,
+			TLSConfig:         s.tlsConfig,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       5 * time.Minute,
+			WriteTimeout:      10 * time.Minute,
+			IdleTimeout:       2 * time.Minute,
 		}
 		servers = append(servers, tlsSrv)
 
@@ -897,6 +910,7 @@ func (s *Server) setupRoutes(r *mux.Router, staticHandler http.Handler) {
 	r.HandleFunc("/{filename}", s.basicAuthHandler(http.HandlerFunc(s.putHandler))).Methods("PUT")
 	r.HandleFunc("/", s.basicAuthHandler(http.HandlerFunc(s.postHandler))).Methods("POST")
 	r.HandleFunc("/{token}/{filename}/{deletionToken}", s.deleteHandler).Methods("DELETE")
+	r.HandleFunc("/{token}/{filename}", s.deleteHandler).Methods("DELETE")
 	r.NotFoundHandler = http.HandlerFunc(s.notFoundHandler)
 }
 

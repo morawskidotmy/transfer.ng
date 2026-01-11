@@ -350,6 +350,12 @@ var globalFlags = []cli.Flag{
 		Value:   "10m",
 		EnvVars: []string{"COMPRESS_LARGE"},
 	},
+	&cli.IntFlag{
+		Name:    "max-archive-files",
+		Usage:   "max number of files allowed in archive downloads (zip/tar)",
+		Value:   100,
+		EnvVars: []string{"MAX_ARCHIVE_FILES"},
+	},
 }
 
 // Cmd wraps cli.app
@@ -459,6 +465,10 @@ func addBasicOptions(c *cli.Context, options *[]server.OptionFn, logger *log.Log
 		if bytes, err := parseSize(v); err == nil {
 			*options = append(*options, server.CompressionThreshold(bytes))
 		}
+	}
+
+	if v := c.Int("max-archive-files"); v > 0 {
+		*options = append(*options, server.MaxArchiveFiles(v))
 	}
 }
 
