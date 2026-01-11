@@ -179,6 +179,10 @@ func acceptsHTML(hdr http.Header) bool {
 }
 
 func formatSize(size int64) string {
+	if size <= 0 {
+		return "0 B"
+	}
+
 	sizeFloat := float64(size)
 	base := math.Log(sizeFloat) / math.Log(1024)
 
@@ -198,7 +202,14 @@ func formatSize(size int64) string {
 	suffixes[3] = "GB"
 	suffixes[4] = "TB"
 
-	getSuffix := suffixes[int(math.Floor(base))]
+	idx := int(math.Floor(base))
+	if idx < 0 {
+		idx = 0
+	} else if idx >= len(suffixes) {
+		idx = len(suffixes) - 1
+	}
+
+	getSuffix := suffixes[idx]
 	return fmt.Sprintf("%s %s", strconv.FormatFloat(newVal, 'f', -1, 64), getSuffix)
 }
 
