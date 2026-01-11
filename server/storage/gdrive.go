@@ -366,10 +366,10 @@ func getGDriveTokenFromWeb(ctx context.Context, config *oauth2.Config, logger *l
 // Retrieves a token from a local file.
 func gDriveTokenFromFile(file string) (*oauth2.Token, error) {
 	f, err := os.Open(file)
-	defer CloseCheck(f)
 	if err != nil {
 		return nil, err
 	}
+	defer CloseCheck(f)
 	tok := &oauth2.Token{}
 	err = json.NewDecoder(f).Decode(tok)
 	return tok, err
@@ -379,10 +379,10 @@ func gDriveTokenFromFile(file string) (*oauth2.Token, error) {
 func saveGDriveToken(path string, token *oauth2.Token, logger *log.Logger) {
 	logger.Printf("Saving credential file to: %s\n", path)
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
-	defer CloseCheck(f)
 	if err != nil {
 		logger.Fatalf("Unable to cache oauth token: %v", err)
 	}
+	defer CloseCheck(f)
 
 	err = json.NewEncoder(f).Encode(token)
 	if err != nil {
