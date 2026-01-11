@@ -73,7 +73,7 @@ func (s *LocalStorage) Get(_ context.Context, token string, filename string, rng
 
 	fi, err := file.Stat()
 	if err != nil {
-		file.Close()
+		_ = file.Close()
 		return nil, 0, err
 	}
 
@@ -81,7 +81,7 @@ func (s *LocalStorage) Get(_ context.Context, token string, filename string, rng
 	if rng != nil {
 		contentLength = rng.AcceptLength(contentLength)
 		if _, err = file.Seek(int64(rng.Start), io.SeekStart); err != nil {
-			file.Close()
+			_ = file.Close()
 			return nil, 0, err
 		}
 	}
