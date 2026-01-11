@@ -495,13 +495,12 @@ func (s *Server) processUploadFile(w http.ResponseWriter, r *http.Request, uploa
 	}
 
 	file, err := os.CreateTemp(s.tempPath, "transfer-")
-	defer s.cleanTmpFile(file)
-
 	if err != nil {
 		s.logger.Printf("upload: failed to create temp file: %v", err)
 		http.Error(w, "Could not process upload.", http.StatusInternalServerError)
 		return false
 	}
+	defer s.cleanTmpFile(file)
 
 	contentLength, err := s.copyAndValidateFile(w, file, f)
 	if err != nil {
@@ -677,12 +676,12 @@ func (s *Server) putHandler(w http.ResponseWriter, r *http.Request) {
 
 	if contentLength < 1 || s.performClamavPrescan {
 		file, err := os.CreateTemp(s.tempPath, "transfer-")
-		defer s.cleanTmpFile(file)
 		if err != nil {
 			s.logger.Printf("put: failed to create temp file: %v", err)
 			http.Error(w, "Could not process upload.", http.StatusInternalServerError)
 			return
 		}
+		defer s.cleanTmpFile(file)
 
 		var bufferErr error
 		contentLength, bufferErr = s.bufferFileToTemp(w, file, r.Body)

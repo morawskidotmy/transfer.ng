@@ -90,7 +90,12 @@ func (s *S3Storage) IsNotExist(err error) bool {
 	}
 
 	var nkerr *types.NoSuchKey
-	return errors.As(err, &nkerr)
+	if errors.As(err, &nkerr) {
+		return true
+	}
+
+	var notFound *types.NotFound
+	return errors.As(err, &notFound)
 }
 
 // Get retrieves a file from storage
@@ -111,7 +116,9 @@ func (s *S3Storage) Get(ctx context.Context, token string, filename string, rng 
 		return
 	}
 
-	contentLength = uint64(*response.ContentLength)
+	if response.ContentLength != nil {
+		contentLength = uint64(*response.ContentLength)
+	}
 	if rng != nil && response.ContentRange != nil {
 		rng.SetContentRange(*response.ContentRange)
 	}
