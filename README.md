@@ -62,64 +62,72 @@ $ curl -X DELETE <X-Url-Delete Response Header URL>
 
 <br />
 
-## Request Headers
+## HTTP Headers Reference
 
-This section explains how to handle request headers with curl:
+### Request Headers
+
+| Header | Description | Example |
+|--------|-------------|---------|
+| `Max-Downloads` | limit number of times file can be downloaded | `Max-Downloads: 5` |
+| `Max-Days` | number of days before file expires | `Max-Days: 7` |
+| `X-Encrypt-Password` | encrypt file server-side with aes256 | `X-Encrypt-Password: mysecret` |
+| `X-Decrypt-Password` | decrypt file server-side when downloading | `X-Decrypt-Password: mysecret` |
+| `X-Deletion-Token` | deletion token for deleting files (alternative to url path) | `X-Deletion-Token: abc123xyz` |
+| `Range` | request partial content (byte range) | `Range: bytes=0-1023` |
+
+### Response Headers
+
+| Header | Description |
+|--------|-------------|
+| `X-Url-Delete` | full url to delete the uploaded file |
+| `X-Remaining-Downloads` | downloads remaining before expiry (or "n/a") |
+| `X-Remaining-Days` | days remaining before expiry (or "n/a") |
+| `Content-Disposition` | attachment or inline with filename |
+| `Content-Type` | mime type of the file |
+| `Content-Length` | size in bytes |
+| `Content-Range` | byte range info for partial content |
+| `Accept-Ranges` | indicates bytes range support |
 
 <br />
 
-### Max-Downloads
+### Header Examples
+
+#### Limit Downloads
 
 ```bash
-$ curl --upload-file ./hello.txt https://transferng.example.com/hello.txt -H "Max-Downloads: 1" # Limit the number of downloads
+$ curl --upload-file ./hello.txt https://transferng.example.com/hello.txt -H "Max-Downloads: 1"
 ```
 
-<br />
-
-### Max-Days
+#### Set Expiration
 
 ```bash
-$ curl --upload-file ./hello.txt https://transferng.example.com/hello.txt -H "Max-Days: 1" # Set the number of days before deletion
+$ curl --upload-file ./hello.txt https://transferng.example.com/hello.txt -H "Max-Days: 7"
 ```
 
-<br />
+#### Encrypt on Upload
 
-### X-Encrypt-Password
+> **Warning**: use this feature only on your self-hosted server
 
-#### Beware, use this feature only on your self-hosted server: trusting a third-party service for server side encryption is at your own risk
 ```bash
-$ curl --upload-file ./hello.txt https://your-transfersh-instance.tld/hello.txt -H "X-Encrypt-Password: test" # Encrypt the content server side with AES256 using "test" as password
+$ curl --upload-file ./hello.txt https://transferng.example.com/hello.txt -H "X-Encrypt-Password: mysecret"
 ```
 
-<br />
-
-### X-Decrypt-Password
-#### Beware, use this feature only on your self-hosted server: trusting a third-party service for server side encryption is at your own risk
+#### Decrypt on Download
 
 ```bash
-$ curl https://your-transfersh-instance.tld/BAYh0/hello.txt -H "X-Decrypt-Password: test" # Decrypt the content server side with AES256 using "test" as password
+$ curl https://transferng.example.com/abc123/hello.txt -H "X-Decrypt-Password: mysecret"
 ```
 
-<br />
-
----
-
-<br />
-
-## Response Headers
-
-This section explains how to handle response headers:
-
-<br />
-
-### X-Url-Delete
-
-The URL used to request the deletion of a file and returned as a response header:
+#### Delete with Header Token
 
 ```bash
-curl -sD - --upload-file ./hello.txt https://transferng.example.com/hello.txt | grep -i -E 'transfer\.sh|x-url-delete'
-x-url-delete: https://transferng.example.com/hello.txt/BAYh0/hello.txt/PDw0NHPcqU
-https://transferng.example.com/hello.txt/BAYh0/hello.txt
+$ curl -X DELETE https://transferng.example.com/abc123/hello.txt -H "X-Deletion-Token: xyz789"
+```
+
+#### Get X-Url-Delete
+
+```bash
+$ curl -sD - --upload-file ./hello.txt https://transferng.example.com/hello.txt | grep -i x-url-delete
 ```
 
 <br />
@@ -201,6 +209,7 @@ purge-days | number of days after the uploads are purged automatically          
 purge-interval | interval (hours) to run automatic purge for (excluding S3 and Storj)               |                               | PURGE_INTERVAL                |   
 random-token-length | length of random token for upload path (double the size for delete path)      | 6                             | RANDOM_TOKEN_LENGTH           |   
 compress-large | **(added for next gen)** compress files larger than specified size using zstd (e.g. 10m, 1g) | 10m                           | COMPRESS_LARGE                |   
+max-archive-files | **(added for next gen)** max files allowed in archive downloads (zip/tar) | 100                           | MAX_ARCHIVE_FILES             |   
 
 If you want to use TLS using lets encrypt certificates, set lets-encrypt-hosts to your domain, set tls-listener to :443 and enable force-https.
 

@@ -49,6 +49,9 @@ import (
 )
 
 const getPathPart = "get"
+const defaultMaxArchiveFiles = 100
+const maxFilenameLength = 255
+const maxTokenLength = 200
 
 func stripPrefix(p string) string {
 	return strings.TrimPrefix(p, web.Prefix+"/")
@@ -82,10 +85,20 @@ func attachDecryptionReader(reader io.ReadCloser, password string) (io.ReadClose
 	return decrypt(reader, []byte(password))
 }
 
-func decrypt(ciphertext io.ReadCloser, password []byte) (plaintext io.ReadCloser, err error) {
+type readerWithCloser struct {
+	io.Reader
+	closeFn func() error
+}
+
+func (r *readerWithCloser) Close() error {
+	return r.closeFn()
+}
+
+func decrypt(ciphertext io.ReadCloser, password []byte) (io.ReadCloser, error) {
 	unarmored, err := armor.Decode(ciphertext)
 	if err != nil {
-		return
+		ciphertext.Close()
+		return nil, err
 	}
 
 	firstTimeCalled := true
@@ -94,8 +107,6 @@ func decrypt(ciphertext io.ReadCloser, password []byte) (plaintext io.ReadCloser
 			firstTimeCalled = false
 			return password, nil
 		}
-		// Re-prompt still occurs if SKESK pasrsing fails (i.e. when decrypted cipher algo is invalid).
-		// For most (but not all) cases, inputting a wrong passwords is expected to trigger this error.
 		return nil, errors.New("gopenpgp: wrong password in symmetric decryption")
 	}
 
@@ -106,13 +117,16 @@ func decrypt(ciphertext io.ReadCloser, password []byte) (plaintext io.ReadCloser
 	var emptyKeyRing openpgp.EntityList
 	md, err := openpgp.ReadMessage(unarmored.Body, emptyKeyRing, prompt, config)
 	if err != nil {
-		// Parsing errors when reading the message are most likely caused by incorrect password, but we cannot know for sure
-		return
+		ciphertext.Close()
+		return nil, err
 	}
 
-	plaintext = io.NopCloser(md.UnverifiedBody)
-
-	return
+	return &readerWithCloser{
+		Reader: md.UnverifiedBody,
+		closeFn: func() error {
+			return ciphertext.Close()
+		},
+	}, nil
 }
 
 func encrypt(plaintext io.ReadCloser, password []byte) (io.ReadCloser, error) {
@@ -165,6 +179,16 @@ func healthHandler(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("Approaching Neutral Zone, all systems normal and functioning."))
 }
 
+func (s *Server) respondError(w http.ResponseWriter, status int, publicMsg string, logFmt string, args ...interface{}) {
+	if logFmt != "" {
+		s.logger.Printf(logFmt, args...)
+	}
+	if publicMsg == "" {
+		publicMsg = http.StatusText(status)
+	}
+	http.Error(w, publicMsg, status)
+}
+
 func canContainsXSS(contentType string) bool {
 	switch {
 	case strings.Contains(contentType, "cache-manifest"):
@@ -186,74 +210,81 @@ func canContainsXSS(contentType string) bool {
 	return false
 }
 
-/* The preview handler will show a preview of the content for browsers (accept type text/html), and referer is not transfer.sh */
+func (s *Server) getPreviewTemplate(contentType string, compressed bool) string {
+	if compressed {
+		return "download.html"
+	}
+	switch {
+	case strings.HasPrefix(contentType, "image/"):
+		return "download.image.html"
+	case strings.HasPrefix(contentType, "video/"):
+		return "download.video.html"
+	case strings.HasPrefix(contentType, "audio/"):
+		return "download.audio.html"
+	case strings.HasPrefix(contentType, "text/"):
+		return "download.markdown.html"
+	default:
+		return "download.html"
+	}
+}
+
+func (s *Server) getTextContent(ctx context.Context, token, filename, contentType string) (htmlTemplate.HTML, string, error) {
+	reader, _, err := s.storage.Get(ctx, token, filename, nil)
+	if err != nil {
+		return "", "", err
+	}
+	defer storage.CloseCheck(reader)
+
+	buf := &bytes.Buffer{}
+	if _, err = io.CopyN(buf, reader, _5M); err != nil && !errors.Is(err, io.EOF) {
+		return "", "", err
+	}
+	data := buf.Bytes()
+
+	if strings.HasPrefix(contentType, "text/x-markdown") || strings.HasPrefix(contentType, "text/markdown") {
+		unsafe := blackfriday.Run(data)
+		output := bluemonday.UGCPolicy().SanitizeBytes(unsafe)
+		return htmlTemplate.HTML(output), "download.markdown.html", nil
+	}
+	if strings.HasPrefix(contentType, "text/plain") {
+		return htmlTemplate.HTML(fmt.Sprintf("<pre>%s</pre>", html.EscapeString(string(data)))), "download.markdown.html", nil
+	}
+	return "", "download.sandbox.html", nil
+}
+
 func (s *Server) previewHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Vary", "Range, Referer, X-Decrypt-Password")
 
 	vars := mux.Vars(r)
-
 	token := vars["token"]
 	filename := vars["filename"]
 
-	metadata, err := s.checkMetadata(r.Context(), token, filename, false)
+	if err := validateTokenAndFilename(token, filename); err != nil {
+		s.respondError(w, http.StatusBadRequest, err.Error(), "")
+		return
+	}
 
+	metadata, err := s.checkMetadata(r.Context(), token, filename, false)
 	if err != nil {
-		s.logger.Printf("Error metadata: %s", err.Error())
-		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		s.respondError(w, http.StatusNotFound, "", "Error metadata: %s", err.Error())
 		return
 	}
 
 	contentType := metadata.ContentType
 	contentLength, err := s.storage.Head(r.Context(), token, filename)
 	if err != nil {
-		http.Error(w, http.StatusText(404), 404)
+		s.respondError(w, http.StatusNotFound, "", "")
 		return
 	}
 
-	var templatePath string
+	templatePath := s.getPreviewTemplate(contentType, metadata.Compressed)
 	var content htmlTemplate.HTML
 
-	if metadata.Compressed {
-		templatePath = "download.html"
-	} else {
-		switch {
-		case strings.HasPrefix(contentType, "image/"):
-			templatePath = "download.image.html"
-		case strings.HasPrefix(contentType, "video/"):
-			templatePath = "download.video.html"
-		case strings.HasPrefix(contentType, "audio/"):
-			templatePath = "download.audio.html"
-		case strings.HasPrefix(contentType, "text/"):
-		templatePath = "download.markdown.html"
-
-		var reader io.ReadCloser
-		if reader, _, err = s.storage.Get(r.Context(), token, filename, nil); err != nil {
-			s.logger.Printf("preview: failed to get %s/%s: %v", token, filename, err)
-			http.Error(w, "Could not retrieve file.", http.StatusInternalServerError)
+	if !metadata.Compressed && strings.HasPrefix(contentType, "text/") {
+		content, templatePath, err = s.getTextContent(r.Context(), token, filename, contentType)
+		if err != nil {
+			s.respondError(w, http.StatusInternalServerError, "Could not retrieve file.", "preview: %v", err)
 			return
-		}
-		defer storage.CloseCheck(reader)
-
-		buf := &bytes.Buffer{}
-		if _, err = io.CopyN(buf, reader, _5M); err != nil && !errors.Is(err, io.EOF) {
-			s.logger.Printf("preview: failed to read %s/%s: %v", token, filename, err)
-			http.Error(w, "Could not retrieve file.", http.StatusInternalServerError)
-			return
-		}
-		data := buf.Bytes()
-
-		if strings.HasPrefix(contentType, "text/x-markdown") || strings.HasPrefix(contentType, "text/markdown") {
-			unsafe := blackfriday.Run(data)
-			output := bluemonday.UGCPolicy().SanitizeBytes(unsafe)
-			content = htmlTemplate.HTML(output)
-		} else if strings.HasPrefix(contentType, "text/plain") {
-			content = htmlTemplate.HTML(fmt.Sprintf("<pre>%s</pre>", html.EscapeString(string(data))))
-		} else {
-			templatePath = "download.sandbox.html"
-		}
-
-		default:
-			templatePath = "download.html"
 		}
 	}
 
@@ -261,18 +292,12 @@ func (s *Server) previewHandler(w http.ResponseWriter, r *http.Request) {
 	resolvedURL := resolveURL(r, relativeURL, s.proxyPort)
 	relativeURLGet, _ := url.Parse(path.Join(s.proxyPath, getPathPart, token, filename))
 	resolvedURLGet := resolveURL(r, relativeURLGet, s.proxyPort)
-	var png []byte
-	png, err = qrcode.Encode(resolvedURL, qrcode.High, 150)
+
+	png, err := qrcode.Encode(resolvedURL, qrcode.High, 150)
 	if err != nil {
-		s.logger.Printf("preview: failed to generate QR code: %v", err)
-		http.Error(w, "Internal server error.", http.StatusInternalServerError)
+		s.respondError(w, http.StatusInternalServerError, "", "preview: failed to generate QR code: %v", err)
 		return
 	}
-
-	qrCode := base64.StdEncoding.EncodeToString(png)
-
-	hostname := getURL(r, s.proxyPort).Host
-	webAddress := resolveWebAddress(r, s.proxyPath, s.proxyPort)
 
 	data := struct {
 		ContentType    string
@@ -294,20 +319,19 @@ func (s *Server) previewHandler(w http.ResponseWriter, r *http.Request) {
 		resolvedURL,
 		resolvedURLGet,
 		token,
-		hostname,
-		webAddress,
+		getURL(r, s.proxyPort).Host,
+		resolveWebAddress(r, s.proxyPath, s.proxyPort),
 		contentLength,
 		s.gaKey,
 		s.userVoiceKey,
-		qrCode,
+		base64.StdEncoding.EncodeToString(png),
 	}
 
 	s.htmlTemplatesMutex.RLock()
 	err = s.htmlTemplates.ExecuteTemplate(w, templatePath, data)
 	s.htmlTemplatesMutex.RUnlock()
 	if err != nil {
-		s.logger.Printf("preview: failed to execute template: %v", err)
-		http.Error(w, "Internal server error.", http.StatusInternalServerError)
+		s.respondError(w, http.StatusInternalServerError, "", "preview: failed to execute template: %v", err)
 		return
 	}
 
@@ -409,7 +433,22 @@ func sanitize(fileName string) string {
 	if len(newName) == 0 {
 		newName = "_"
 	}
+
+	if len(newName) > maxFilenameLength {
+		newName = newName[:maxFilenameLength]
+	}
+
 	return newName
+}
+
+func validateTokenAndFilename(token, filename string) error {
+	if len(token) > maxTokenLength {
+		return fmt.Errorf("token too long")
+	}
+	if len(filename) > maxFilenameLength {
+		return fmt.Errorf("filename too long")
+	}
+	return nil
 }
 
 func (s *Server) postHandler(w http.ResponseWriter, r *http.Request) {
@@ -1003,27 +1042,68 @@ func (s *Server) deleteHandler(w http.ResponseWriter, r *http.Request) {
 	filename := vars["filename"]
 	deletionToken := vars["deletionToken"]
 
+	if deletionToken == "" {
+		deletionToken = r.Header.Get("X-Deletion-Token")
+	}
+
+	if deletionToken == "" {
+		s.respondError(w, http.StatusNotFound, "", "delete: missing deletion token")
+		return
+	}
+
 	if err := s.checkDeletionToken(r.Context(), deletionToken, token, filename); err != nil {
-		s.logger.Printf("Error metadata: %s", err.Error())
-		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		s.respondError(w, http.StatusNotFound, "", "Error metadata: %s", err.Error())
 		return
 	}
 
 	err := s.storage.Delete(r.Context(), token, filename)
 	if s.storage.IsNotExist(err) {
-		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		s.respondError(w, http.StatusNotFound, "", "")
 		return
 	} else if err != nil {
-		s.logger.Printf("%s", err.Error())
-		http.Error(w, "Could not delete file.", http.StatusInternalServerError)
+		s.respondError(w, http.StatusInternalServerError, "Could not delete file.", "%v", err)
 		return
 	}
+}
+
+type archiveFileSpec struct {
+	token    string
+	filename string
+}
+
+func (s *Server) parseArchiveFiles(filesSpec string) ([]archiveFileSpec, error) {
+	keys := strings.Split(filesSpec, ",")
+	maxFiles := s.maxArchiveFiles
+	if maxFiles <= 0 {
+		maxFiles = defaultMaxArchiveFiles
+	}
+	if len(keys) > maxFiles {
+		return nil, fmt.Errorf("too many files requested (max %d)", maxFiles)
+	}
+
+	var specs []archiveFileSpec
+	for _, key := range keys {
+		key = resolveKey(key, s.proxyPath)
+		parts := strings.SplitN(key, "/", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		specs = append(specs, archiveFileSpec{
+			token:    parts[0],
+			filename: sanitize(parts[1]),
+		})
+	}
+	return specs, nil
 }
 
 func (s *Server) zipHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 
-	files := vars["files"]
+	specs, err := s.parseArchiveFiles(vars["files"])
+	if err != nil {
+		s.respondError(w, http.StatusBadRequest, err.Error(), "")
+		return
+	}
 
 	zipfilename := fmt.Sprintf("transfersh-%d.zip", time.Now().UnixNano())
 
@@ -1032,36 +1112,24 @@ func (s *Server) zipHandler(w http.ResponseWriter, r *http.Request) {
 
 	zw := zip.NewWriter(w)
 
-	for _, key := range strings.Split(files, ",") {
-		key = resolveKey(key, s.proxyPath)
-
-		parts := strings.SplitN(key, "/", 2)
-		if len(parts) != 2 {
-			s.logger.Printf("invalid file spec in zip: %q", key)
-			continue
-		}
-		token := parts[0]
-		filename := sanitize(parts[1])
-
-		if _, err := s.checkMetadata(r.Context(), token, filename, true); err != nil {
+	for _, spec := range specs {
+		if _, err := s.checkMetadata(r.Context(), spec.token, spec.filename, true); err != nil {
 			s.logger.Printf("Error metadata: %s", err.Error())
 			continue
 		}
 
-		reader, _, err := s.storage.Get(r.Context(), token, filename, nil)
+		reader, _, err := s.storage.Get(r.Context(), spec.token, spec.filename, nil)
 		if err != nil {
 			if s.storage.IsNotExist(err) {
-				http.Error(w, "File not found", 404)
+				s.respondError(w, http.StatusNotFound, "File not found", "")
 				return
 			}
-
-			s.logger.Printf("%s", err.Error())
-			http.Error(w, "Could not retrieve file.", http.StatusInternalServerError)
+			s.respondError(w, http.StatusInternalServerError, "Could not retrieve file.", "%v", err)
 			return
 		}
 
 		header := &zip.FileHeader{
-			Name:     filename,
+			Name:     spec.filename,
 			Method:   zip.Store,
 			Modified: time.Now().UTC(),
 		}
@@ -1069,23 +1137,20 @@ func (s *Server) zipHandler(w http.ResponseWriter, r *http.Request) {
 		fw, err := zw.CreateHeader(header)
 		if err != nil {
 			storage.CloseCheck(reader)
-			s.logger.Printf("%s", err.Error())
-			http.Error(w, "Internal server error.", http.StatusInternalServerError)
+			s.respondError(w, http.StatusInternalServerError, "", "%v", err)
 			return
 		}
 
 		_, err = io.Copy(fw, reader)
 		storage.CloseCheck(reader)
 		if err != nil {
-			s.logger.Printf("%s", err.Error())
-			http.Error(w, "Internal server error.", http.StatusInternalServerError)
+			s.respondError(w, http.StatusInternalServerError, "", "%v", err)
 			return
 		}
 	}
 
 	if err := zw.Close(); err != nil {
-		s.logger.Printf("%s", err.Error())
-		http.Error(w, "Internal server error.", http.StatusInternalServerError)
+		s.respondError(w, http.StatusInternalServerError, "", "%v", err)
 		return
 	}
 }
@@ -1093,7 +1158,11 @@ func (s *Server) zipHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) tarGzHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 
-	files := vars["files"]
+	specs, err := s.parseArchiveFiles(vars["files"])
+	if err != nil {
+		s.respondError(w, http.StatusBadRequest, err.Error(), "")
+		return
+	}
 
 	tarfilename := fmt.Sprintf("transfersh-%d.tar.gz", time.Now().UnixNano())
 
@@ -1106,52 +1175,38 @@ func (s *Server) tarGzHandler(w http.ResponseWriter, r *http.Request) {
 	zw := tar.NewWriter(gw)
 	defer storage.CloseCheck(zw)
 
-	for _, key := range strings.Split(files, ",") {
-		key = resolveKey(key, s.proxyPath)
-
-		parts := strings.SplitN(key, "/", 2)
-		if len(parts) != 2 {
-			s.logger.Printf("invalid file spec in tar.gz: %q", key)
-			continue
-		}
-		token := parts[0]
-		filename := sanitize(parts[1])
-
-		if _, err := s.checkMetadata(r.Context(), token, filename, true); err != nil {
+	for _, spec := range specs {
+		if _, err := s.checkMetadata(r.Context(), spec.token, spec.filename, true); err != nil {
 			s.logger.Printf("Error metadata: %s", err.Error())
 			continue
 		}
 
-		reader, contentLength, err := s.storage.Get(r.Context(), token, filename, nil)
+		reader, contentLength, err := s.storage.Get(r.Context(), spec.token, spec.filename, nil)
 		if err != nil {
 			if s.storage.IsNotExist(err) {
-				http.Error(w, "File not found", 404)
+				s.respondError(w, http.StatusNotFound, "File not found", "")
 				return
 			}
-
-			s.logger.Printf("%s", err.Error())
-			http.Error(w, "Could not retrieve file.", http.StatusInternalServerError)
+			s.respondError(w, http.StatusInternalServerError, "Could not retrieve file.", "%v", err)
 			return
 		}
 
 		header := &tar.Header{
-			Name: filename,
+			Name: spec.filename,
 			Size: int64(contentLength),
 		}
 
 		err = zw.WriteHeader(header)
 		if err != nil {
 			storage.CloseCheck(reader)
-			s.logger.Printf("%s", err.Error())
-			http.Error(w, "Internal server error.", http.StatusInternalServerError)
+			s.respondError(w, http.StatusInternalServerError, "", "%v", err)
 			return
 		}
 
 		_, err = io.Copy(zw, reader)
 		storage.CloseCheck(reader)
 		if err != nil {
-			s.logger.Printf("%s", err.Error())
-			http.Error(w, "Internal server error.", http.StatusInternalServerError)
+			s.respondError(w, http.StatusInternalServerError, "", "%v", err)
 			return
 		}
 	}
@@ -1160,7 +1215,11 @@ func (s *Server) tarGzHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) tarHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 
-	files := vars["files"]
+	specs, err := s.parseArchiveFiles(vars["files"])
+	if err != nil {
+		s.respondError(w, http.StatusBadRequest, err.Error(), "")
+		return
+	}
 
 	tarfilename := fmt.Sprintf("transfersh-%d.tar", time.Now().UnixNano())
 
@@ -1170,52 +1229,38 @@ func (s *Server) tarHandler(w http.ResponseWriter, r *http.Request) {
 	zw := tar.NewWriter(w)
 	defer storage.CloseCheck(zw)
 
-	for _, key := range strings.Split(files, ",") {
-		key = resolveKey(key, s.proxyPath)
-
-		parts := strings.SplitN(key, "/", 2)
-		if len(parts) != 2 {
-			s.logger.Printf("invalid file spec in tar: %q", key)
-			continue
-		}
-		token := parts[0]
-		filename := sanitize(parts[1])
-
-		if _, err := s.checkMetadata(r.Context(), token, filename, true); err != nil {
+	for _, spec := range specs {
+		if _, err := s.checkMetadata(r.Context(), spec.token, spec.filename, true); err != nil {
 			s.logger.Printf("Error metadata: %s", err.Error())
 			continue
 		}
 
-		reader, contentLength, err := s.storage.Get(r.Context(), token, filename, nil)
+		reader, contentLength, err := s.storage.Get(r.Context(), spec.token, spec.filename, nil)
 		if err != nil {
 			if s.storage.IsNotExist(err) {
-				http.Error(w, "File not found", 404)
+				s.respondError(w, http.StatusNotFound, "File not found", "")
 				return
 			}
-
-			s.logger.Printf("%s", err.Error())
-			http.Error(w, "Could not retrieve file.", http.StatusInternalServerError)
+			s.respondError(w, http.StatusInternalServerError, "Could not retrieve file.", "%v", err)
 			return
 		}
 
 		header := &tar.Header{
-			Name: filename,
+			Name: spec.filename,
 			Size: int64(contentLength),
 		}
 
 		err = zw.WriteHeader(header)
 		if err != nil {
 			storage.CloseCheck(reader)
-			s.logger.Printf("%s", err.Error())
-			http.Error(w, "Internal server error.", http.StatusInternalServerError)
+			s.respondError(w, http.StatusInternalServerError, "", "%v", err)
 			return
 		}
 
 		_, err = io.Copy(zw, reader)
 		storage.CloseCheck(reader)
 		if err != nil {
-			s.logger.Printf("%s", err.Error())
-			http.Error(w, "Internal server error.", http.StatusInternalServerError)
+			s.respondError(w, http.StatusInternalServerError, "", "%v", err)
 			return
 		}
 	}
@@ -1227,22 +1272,25 @@ func (s *Server) headHandler(w http.ResponseWriter, r *http.Request) {
 	token := vars["token"]
 	filename := vars["filename"]
 
+	if err := validateTokenAndFilename(token, filename); err != nil {
+		s.respondError(w, http.StatusBadRequest, err.Error(), "")
+		return
+	}
+
 	metadata, err := s.checkMetadata(r.Context(), token, filename, false)
 
 	if err != nil {
-		s.logger.Printf("Error metadata: %s", err.Error())
-		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		s.respondError(w, http.StatusNotFound, "", "Error metadata: %s", err.Error())
 		return
 	}
 
 	contentType := metadata.ContentType
 	contentLength, err := s.storage.Head(r.Context(), token, filename)
 	if s.storage.IsNotExist(err) {
-		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		s.respondError(w, http.StatusNotFound, "", "")
 		return
 	} else if err != nil {
-		s.logger.Printf("%s", err.Error())
-		http.Error(w, "Could not retrieve file.", http.StatusInternalServerError)
+		s.respondError(w, http.StatusInternalServerError, "Could not retrieve file.", "%v", err)
 		return
 	}
 
@@ -1267,10 +1315,14 @@ func (s *Server) getHandler(w http.ResponseWriter, r *http.Request) {
 	token := vars["token"]
 	filename := vars["filename"]
 
+	if err := validateTokenAndFilename(token, filename); err != nil {
+		s.respondError(w, http.StatusBadRequest, err.Error(), "")
+		return
+	}
+
 	metadata, err := s.checkMetadata(r.Context(), token, filename, true)
 	if err != nil {
-		s.logger.Printf("Error metadata: %s", err.Error())
-		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		s.respondError(w, http.StatusNotFound, "", "Error metadata: %s", err.Error())
 		return
 	}
 
@@ -1281,11 +1333,10 @@ func (s *Server) getHandler(w http.ResponseWriter, r *http.Request) {
 	defer storage.CloseCheck(reader)
 
 	if s.storage.IsNotExist(err) {
-		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		s.respondError(w, http.StatusNotFound, "", "")
 		return
 	} else if err != nil {
-		s.logger.Printf("%s", err.Error())
-		http.Error(w, "Could not retrieve file.", http.StatusInternalServerError)
+		s.respondError(w, http.StatusInternalServerError, "Could not retrieve file.", "%v", err)
 		return
 	}
 
