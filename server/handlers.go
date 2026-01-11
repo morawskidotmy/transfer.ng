@@ -1330,8 +1330,6 @@ func (s *Server) getHandler(w http.ResponseWriter, r *http.Request) {
 	contentType := metadata.ContentType
 
 	reader, contentLength, err := s.storage.Get(r.Context(), token, filename, rng)
-	defer storage.CloseCheck(reader)
-
 	if s.storage.IsNotExist(err) {
 		s.respondError(w, http.StatusNotFound, "", "")
 		return
@@ -1339,6 +1337,7 @@ func (s *Server) getHandler(w http.ResponseWriter, r *http.Request) {
 		s.respondError(w, http.StatusInternalServerError, "Could not retrieve file.", "%v", err)
 		return
 	}
+	defer storage.CloseCheck(reader)
 
 	reader = s.handleRangeHeaders(w, reader, rng)
 

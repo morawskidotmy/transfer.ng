@@ -33,13 +33,19 @@ jobs:
         run: |
           go version
           go vet ./...
-          go test ./...
+          go test -race -coverprofile=coverage.txt -covermode=atomic ./...
       - name: Vet and test gotip
         if: ${{ matrix.go_version == 'tip' }}
         run: |
           `go env GOPATH`/bin/gotip version
           `go env GOPATH`/bin/gotip vet ./...
-          `go env GOPATH`/bin/gotip test ./...
+          `go env GOPATH`/bin/gotip test -race -coverprofile=coverage.txt -covermode=atomic ./...
+      - name: Upload coverage
+        if: ${{ matrix.go_version == '1.24' }}
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.txt
+          fail_ci_if_error: false
   golangci:
     name: Linting
     runs-on: ubuntu-latest
