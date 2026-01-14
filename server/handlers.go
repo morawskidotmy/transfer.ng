@@ -429,7 +429,7 @@ func (s *Server) viewHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) notFoundHandler(w http.ResponseWriter, _ *http.Request) {
-	http.Error(w, http.StatusText(404), 404)
+	http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 }
 
 func sanitize(fileName string) string {
