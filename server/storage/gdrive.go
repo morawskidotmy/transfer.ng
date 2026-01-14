@@ -235,8 +235,12 @@ func (s *GDrive) Get(ctx context.Context, token string, filename string, rng *Ra
 
 // Delete removes a file from storage
 func (s *GDrive) Delete(ctx context.Context, token string, filename string) (err error) {
-	metadata, _ := s.findID(fmt.Sprintf("%s.metadata", filename), token)
-	_ = s.service.Files.Delete(metadata).Do()
+	metadata, metaErr := s.findID(fmt.Sprintf("%s.metadata", filename), token)
+	if metaErr == nil {
+		if delErr := s.service.Files.Delete(metadata).Context(ctx).Do(); delErr != nil {
+			return delErr
+		}
+	}
 
 	var fileID string
 	fileID, err = s.findID(filename, token)
