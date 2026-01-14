@@ -135,7 +135,7 @@ func (s *LocalStorage) IsNotExist(err error) bool {
 	return os.IsNotExist(err)
 }
 
-func (s *LocalStorage) Put(_ context.Context, token string, filename string, reader io.Reader, contentType string, contentLength uint64) error {
+func (s *LocalStorage) Put(_ context.Context, token string, filename string, reader io.Reader, _ string, _ uint64) error {
 	fullPath, err := s.buildPath(token, filename)
 	if err != nil {
 		return err

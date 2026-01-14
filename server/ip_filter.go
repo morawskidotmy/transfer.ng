@@ -18,9 +18,9 @@ import (
 //
 // This could be improved with some algorithmic magic.
 type IPFilterOptions struct {
-	//explicity allowed IPs
+	//explicitly allowed IPs
 	AllowedIPs []string
-	//explicity blocked IPs
+	//explicitly blocked IPs
 	BlockedIPs []string
 	//block by default (defaults to allow)
 	BlockByDefault bool
