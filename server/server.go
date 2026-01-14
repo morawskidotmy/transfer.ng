@@ -25,6 +25,7 @@ import (
 	gorillaHandlers "github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 	"github.com/tg123/go-htpasswd"
+	"github.com/tomasen/realip"
 	"golang.org/x/crypto/acme/autocert"
 
 	"github.com/morawskidotmy/transfer.ng/server/storage"
@@ -688,17 +689,107 @@ func registerMimeTypes() {
 	}
 }
 
-func (s *Server) Run() {
-	listening := false
-	var servers []*http.Server
-
-	if s.profilerEnabled {
-		listening = true
-		go func() {
-			s.logger.Println("Profiled listening at: :6060")
-			_ = http.ListenAndServe(":6060", nil)
-		}()
+func (s *Server) startProfiler() bool {
+	if !s.profilerEnabled {
+		return false
 	}
+	profileAddr := s.ProfileListenerString
+	if profileAddr == "" {
+		profileAddr = ":6060"
+	}
+	go func() {
+		s.logger.Println("Profiler listening at:", profileAddr)
+		_ = http.ListenAndServe(profileAddr, nil)
+	}()
+	return true
+}
+
+func (s *Server) createCorsHandler() func(http.Handler) http.Handler {
+	if len(s.CorsDomains) > 0 {
+		return gorillaHandlers.CORS(
+			gorillaHandlers.AllowedHeaders([]string{
+				"Content-Type",
+				"Content-Length",
+				"Accept",
+				"Authorization",
+				"X-Requested-With",
+				"X-Deletion-Token",
+				"X-Encrypt-Password",
+				"X-Decrypt-Password",
+				"Max-Downloads",
+				"Max-Days",
+				"Range",
+			}),
+			gorillaHandlers.AllowedOrigins(strings.Split(s.CorsDomains, ",")),
+			gorillaHandlers.AllowedMethods([]string{"GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS"}),
+		)
+	}
+	return func(h http.Handler) http.Handler {
+		return h
+	}
+}
+
+func (s *Server) createHTTPServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       5 * time.Minute,
+		WriteTimeout:      10 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
+	}
+}
+
+func (s *Server) startHTTPServer(h http.Handler) *http.Server {
+	if s.TLSListenerOnly {
+		return nil
+	}
+	s.logger.Printf("starting to listen on: %v\n", s.ListenerString)
+	httpSrv := s.createHTTPServer(s.ListenerString, h)
+	go func() {
+		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			s.logger.Fatal(err)
+		}
+	}()
+	return httpSrv
+}
+
+func (s *Server) startTLSServer(h http.Handler) *http.Server {
+	if s.TLSListenerString == "" {
+		return nil
+	}
+	s.logger.Printf("starting to listen for TLS on: %v\n", s.TLSListenerString)
+	tlsSrv := s.createHTTPServer(s.TLSListenerString, h)
+	tlsSrv.TLSConfig = s.tlsConfig
+	go func() {
+		if err := tlsSrv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			s.logger.Fatal(err)
+		}
+	}()
+	return tlsSrv
+}
+
+func (s *Server) shutdownServers(servers []*http.Server) {
+	s.logger.Printf("Shutting down...")
+	s.purgeCancel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, srv := range servers {
+		if err := srv.Shutdown(ctx); err != nil {
+			s.logger.Printf("server shutdown error: %v", err)
+		}
+	}
+
+	if s.logFile != nil {
+		_ = s.logFile.Close()
+	}
+	s.logger.Printf("Server stopped.")
+}
+
+func (s *Server) Run() {
+	listening := s.startProfiler()
+	var servers []*http.Server
 
 	r := mux.NewRouter()
 	s.htmlTemplates = initHTMLTemplates()
@@ -716,24 +807,11 @@ func (s *Server) Run() {
 
 	staticHandler := http.FileServer(fs)
 	s.setupRoutes(r, staticHandler)
-
 	registerMimeTypes()
 
 	s.logger.Printf("Transfer.sh server started.\nusing temp folder: %s\nusing storage provider: %s", s.tempPath, s.storage.Type())
 
-	var cors func(http.Handler) http.Handler
-	if len(s.CorsDomains) > 0 {
-		cors = gorillaHandlers.CORS(
-			gorillaHandlers.AllowedHeaders([]string{"*"}),
-			gorillaHandlers.AllowedOrigins(strings.Split(s.CorsDomains, ",")),
-			gorillaHandlers.AllowedMethods([]string{"GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS"}),
-		)
-	} else {
-		cors = func(h http.Handler) http.Handler {
-			return h
-		}
-	}
-
+	cors := s.createCorsHandler()
 	h := securityHeadersHandler(
 		handlers.PanicHandler(
 			ipFilterHandler(
@@ -748,53 +826,19 @@ func (s *Server) Run() {
 		),
 	)
 
-	if !s.TLSListenerOnly {
+	if httpSrv := s.startHTTPServer(h); httpSrv != nil {
 		listening = true
-		s.logger.Printf("starting to listen on: %v\n", s.ListenerString)
-
-		httpSrv := &http.Server{
-			Addr:              s.ListenerString,
-			Handler:           h,
-			ReadHeaderTimeout: 10 * time.Second,
-			ReadTimeout:       5 * time.Minute,
-			WriteTimeout:      10 * time.Minute,
-			IdleTimeout:       2 * time.Minute,
-		}
 		servers = append(servers, httpSrv)
-
-		go func() {
-			if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				s.logger.Fatal(err)
-			}
-		}()
 	}
 
-	if s.TLSListenerString != "" {
+	if tlsSrv := s.startTLSServer(h); tlsSrv != nil {
 		listening = true
-		s.logger.Printf("starting to listen for TLS on: %v\n", s.TLSListenerString)
-
-		tlsSrv := &http.Server{
-			Addr:              s.TLSListenerString,
-			Handler:           h,
-			TLSConfig:         s.tlsConfig,
-			ReadHeaderTimeout: 10 * time.Second,
-			ReadTimeout:       5 * time.Minute,
-			WriteTimeout:      10 * time.Minute,
-			IdleTimeout:       2 * time.Minute,
-		}
 		servers = append(servers, tlsSrv)
-
-		go func() {
-			if err := tlsSrv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				s.logger.Fatal(err)
-			}
-		}()
 	}
 
 	s.logger.Printf("---------------------------")
 
 	s.purgeCtx, s.purgeCancel = context.WithCancel(context.Background())
-
 	if s.purgeDays > 0 {
 		go s.purgeHandler()
 	}
@@ -809,22 +853,7 @@ func (s *Server) Run() {
 		s.logger.Printf("No listener active.")
 	}
 
-	s.logger.Printf("Shutting down...")
-	s.purgeCancel()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	for _, srv := range servers {
-		if err := srv.Shutdown(ctx); err != nil {
-			s.logger.Printf("server shutdown error: %v", err)
-		}
-	}
-
-	if s.logFile != nil {
-		_ = s.logFile.Close()
-	}
-
-	s.logger.Printf("Server stopped.")
+	s.shutdownServers(servers)
 }
 
 func (s *Server) loadTemplatesFromPath() {
@@ -898,7 +927,10 @@ func (s *Server) setupRoutes(r *mux.Router, staticHandler http.Handler) {
 
 	getHandlerFn := s.getHandler
 	if s.rateLimitRequests > 0 {
-		getHandlerFn = ratelimit.Request(ratelimit.IP).Rate(s.rateLimitRequests, 60*time.Second).LimitBy(memory.New())(http.HandlerFunc(getHandlerFn)).ServeHTTP
+		realIPKeyFn := func(r *http.Request) string {
+			return realip.FromRequest(r)
+		}
+		getHandlerFn = ratelimit.Request(realIPKeyFn).Rate(s.rateLimitRequests, 60*time.Second).LimitBy(memory.New())(http.HandlerFunc(getHandlerFn)).ServeHTTP
 	}
 
 	r.HandleFunc("/{token}/{filename}", getHandlerFn).Methods("GET")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"regexp"
 	"strconv"
 	"time"
@@ -114,6 +115,6 @@ func CloseCheck(c io.Closer) {
 	}
 
 	if err := c.Close(); err != nil {
-		fmt.Println("Received close error:", err)
+		log.Printf("close error: %v", err)
 	}
 }
