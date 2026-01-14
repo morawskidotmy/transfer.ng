@@ -571,7 +571,7 @@ func addStorageProvider(c *cli.Context, options *[]server.OptionFn, logger *log.
 	case "local":
 		return addLocalStorage(c, options, logger)
 	default:
-		return errors.New("Provider not set or invalid.")
+		return errors.New("provider not set or invalid")
 	}
 }
 
@@ -581,13 +581,13 @@ func addS3Storage(c *cli.Context, options *[]server.OptionFn, logger *log.Logger
 	bucket := c.String("bucket")
 
 	if accessKey == "" {
-		return errors.New("access-key not set.")
+		return errors.New("access-key not set")
 	}
 	if secretKey == "" {
-		return errors.New("secret-key not set.")
+		return errors.New("secret-key not set")
 	}
 	if bucket == "" {
-		return errors.New("bucket not set.")
+		return errors.New("bucket not set")
 	}
 
 	store, err := storage.NewS3Storage(c.Context, accessKey, secretKey, bucket, purgeDays,
@@ -608,13 +608,13 @@ func addGDriveStorage(c *cli.Context, options *[]server.OptionFn, logger *log.Lo
 	basedir := c.String("basedir")
 
 	if clientJSONFilepath == "" {
-		return errors.New("gdrive-client-json-filepath not set.")
+		return errors.New("gdrive-client-json-filepath not set")
 	}
 	if localConfigPath == "" {
-		return errors.New("gdrive-local-config-path not set.")
+		return errors.New("gdrive-local-config-path not set")
 	}
 	if basedir == "" {
-		return errors.New("basedir not set.")
+		return errors.New("basedir not set")
 	}
 
 	store, err := storage.NewGDriveStorage(c.Context, clientJSONFilepath, localConfigPath, basedir, chunkSize, logger)
@@ -631,10 +631,10 @@ func addStorjStorage(c *cli.Context, options *[]server.OptionFn, logger *log.Log
 	bucket := c.String("storj-bucket")
 
 	if access == "" {
-		return errors.New("storj-access not set.")
+		return errors.New("storj-access not set")
 	}
 	if bucket == "" {
-		return errors.New("storj-bucket not set.")
+		return errors.New("storj-bucket not set")
 	}
 
 	store, err := storage.NewStorjStorage(c.Context, access, bucket, purgeDays, logger)
@@ -649,7 +649,7 @@ func addStorjStorage(c *cli.Context, options *[]server.OptionFn, logger *log.Log
 func addLocalStorage(c *cli.Context, options *[]server.OptionFn, logger *log.Logger) error {
 	basedir := c.String("basedir")
 	if basedir == "" {
-		return errors.New("basedir not set.")
+		return errors.New("basedir not set")
 	}
 
 	store, err := storage.NewLocalStorage(basedir, logger)

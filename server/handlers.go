@@ -374,8 +374,16 @@ func (s *Server) viewHandler(w http.ResponseWriter, r *http.Request) {
 		purgeTime = formatDurationDays(s.purgeDays)
 	}
 
-	tokenA, _ := token(s.randomTokenLength)
-	tokenB, _ := token(s.randomTokenLength)
+	tokenA, err := token(s.randomTokenLength)
+	if err != nil {
+		s.respondError(w, http.StatusInternalServerError, "", "view: failed to generate token: %v", err)
+		return
+	}
+	tokenB, err := token(s.randomTokenLength)
+	if err != nil {
+		s.respondError(w, http.StatusInternalServerError, "", "view: failed to generate token: %v", err)
+		return
+	}
 	data := struct {
 		Hostname      string
 		WebAddress    string
@@ -535,8 +543,7 @@ func (s *Server) processUploadFile(w http.ResponseWriter, r *http.Request, uploa
 		return false
 	}
 
-	s.addResponseURL(w, r, uploadToken, filename, responseBody)
-	return true
+	return s.addResponseURL(w, r, uploadToken, filename, responseBody)
 }
 
 func (s *Server) copyAndValidateFile(w http.ResponseWriter, file *os.File, f io.Reader) (int64, error) {
@@ -556,7 +563,7 @@ func (s *Server) copyAndValidateFile(w http.ResponseWriter, file *os.File, f io.
 	if s.maxUploadSize > 0 && n > s.maxUploadSize {
 		s.logger.Print("Entity too large")
 		http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
-		return 0, err
+		return 0, errors.New("entity too large")
 	}
 
 	return n, nil
@@ -579,7 +586,12 @@ func (s *Server) runVirusScan(w http.ResponseWriter, filePath string) bool {
 }
 
 func (s *Server) saveFileWithMetadata(w http.ResponseWriter, r *http.Request, uploadToken, filename, contentType string, contentLength int64, file *os.File) bool {
-	metadata := metadataForRequest(contentType, contentLength, s.randomTokenLength, r)
+	metadata, err := metadataForRequest(contentType, contentLength, s.randomTokenLength, r)
+	if err != nil {
+		s.logger.Printf("saveFileWithMetadata: %v", err)
+		http.Error(w, "Could not generate metadata", http.StatusInternalServerError)
+		return false
+	}
 
 	buffer := &bytes.Buffer{}
 	if err := json.NewEncoder(buffer).Encode(metadata); err != nil {
@@ -611,15 +623,21 @@ func (s *Server) saveFileWithMetadata(w http.ResponseWriter, r *http.Request, up
 	return true
 }
 
-func (s *Server) addResponseURL(w http.ResponseWriter, r *http.Request, uploadToken, filename string, responseBody *strings.Builder) {
+func (s *Server) addResponseURL(w http.ResponseWriter, r *http.Request, uploadToken, filename string, responseBody *strings.Builder) bool {
 	escapedFilename := url.PathEscape(filename)
-	metadata := metadataForRequest(mime.TypeByExtension(filepath.Ext(filename)), 0, s.randomTokenLength, r)
+	metadata, err := metadataForRequest(mime.TypeByExtension(filepath.Ext(filename)), 0, s.randomTokenLength, r)
+	if err != nil {
+		s.logger.Printf("addResponseURL: %v", err)
+		http.Error(w, "Could not generate response", http.StatusInternalServerError)
+		return false
+	}
 
 	relativeURL, _ := url.Parse(path.Join(s.proxyPath, uploadToken, escapedFilename))
 	deleteURL, _ := url.Parse(path.Join(s.proxyPath, uploadToken, escapedFilename, metadata.DeletionToken))
 	w.Header().Add("X-Url-Delete", resolveURL(r, deleteURL, s.proxyPort))
 	responseBody.WriteString(getURL(r, s.proxyPort).ResolveReference(relativeURL).String())
 	responseBody.WriteString("\n")
+	return true
 }
 
 func (s *Server) cleanTmpFile(f *os.File) {
@@ -648,9 +666,15 @@ type metadata struct {
 	Compressed           bool
 }
 
-func metadataForRequest(contentType string, contentLength int64, randomTokenLength int, r *http.Request) metadata {
-	delToken1, _ := token(randomTokenLength)
-	delToken2, _ := token(randomTokenLength)
+func metadataForRequest(contentType string, contentLength int64, randomTokenLength int, r *http.Request) (metadata, error) {
+	delToken1, err := token(randomTokenLength)
+	if err != nil {
+		return metadata{}, err
+	}
+	delToken2, err := token(randomTokenLength)
+	if err != nil {
+		return metadata{}, err
+	}
 	metadata := metadata{
 		ContentType:   strings.ToLower(contentType),
 		ContentLength: contentLength,
@@ -680,7 +704,7 @@ func metadataForRequest(contentType string, contentLength int64, randomTokenLeng
 		metadata.Encrypted = false
 	}
 
-	return metadata
+	return metadata, nil
 }
 
 func (s *Server) putHandler(w http.ResponseWriter, r *http.Request) {
@@ -768,7 +792,12 @@ func (s *Server) validateUploadSize(w http.ResponseWriter, contentLength int64) 
 }
 
 func (s *Server) processPutUpload(w http.ResponseWriter, r *http.Request, putToken, filename, contentType string, contentLength int64, reader io.ReadCloser) bool {
-	metadata := metadataForRequest(contentType, contentLength, s.randomTokenLength, r)
+	metadata, err := metadataForRequest(contentType, contentLength, s.randomTokenLength, r)
+	if err != nil {
+		s.logger.Printf("processPutUpload: %v", err)
+		http.Error(w, "Could not generate metadata", http.StatusInternalServerError)
+		return false
+	}
 
 	shouldCompress := s.compressionThreshold > 0 && contentLength > s.compressionThreshold
 	if shouldCompress {
@@ -842,8 +871,13 @@ func (s *Server) compressAndUpdate(w http.ResponseWriter, reader *io.ReadCloser,
 	return true
 }
 
-func (s *Server) writePutResponse(w http.ResponseWriter, r *http.Request, putToken, filename string) {
-	metadata := metadataForRequest(mime.TypeByExtension(filepath.Ext(filename)), 0, s.randomTokenLength, r)
+func (s *Server) writePutResponse(w http.ResponseWriter, r *http.Request, putToken, filename string) bool {
+	metadata, err := metadataForRequest(mime.TypeByExtension(filepath.Ext(filename)), 0, s.randomTokenLength, r)
+	if err != nil {
+		s.logger.Printf("writePutResponse: %v", err)
+		http.Error(w, "Could not generate response", http.StatusInternalServerError)
+		return false
+	}
 
 	w.Header().Set("Content-Type", "text/plain")
 	escapedFilename := url.PathEscape(filename)
@@ -852,6 +886,7 @@ func (s *Server) writePutResponse(w http.ResponseWriter, r *http.Request, putTok
 
 	w.Header().Set("X-Url-Delete", resolveURL(r, deleteURL, s.proxyPort))
 	_, _ = w.Write([]byte(resolveURL(r, relativeURL, s.proxyPort)))
+	return true
 }
 
 func resolveURL(r *http.Request, u *url.URL, proxyPort string) string {
@@ -865,7 +900,7 @@ func resolveKey(key, proxyPath string) string {
 
 	key = strings.TrimPrefix(key, proxyPath)
 
-	key = strings.Replace(key, "\\", "/", -1)
+	key = strings.ReplaceAll(key, "\\", "/")
 
 	return key
 }
@@ -1358,7 +1393,7 @@ func (s *Server) getHandler(w http.ResponseWriter, r *http.Request) {
 
 	reader = s.handleRangeHeaders(w, reader, rng)
 
-	disposition := s.getDisposition(action, contentType)
+	disposition := s.getDisposition(action)
 
 	if action == "inline" && strings.TrimSpace(contentType) == "" {
 		contentType = "text/plain; charset=utf-8"
@@ -1416,7 +1451,7 @@ func (s *Server) handleRangeHeaders(w http.ResponseWriter, reader io.ReadCloser,
 	return reader
 }
 
-func (s *Server) getDisposition(action, contentType string) string {
+func (s *Server) getDisposition(action string) string {
 	if action == "inline" {
 		return "inline"
 	}

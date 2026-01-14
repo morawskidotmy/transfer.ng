@@ -26,11 +26,10 @@ func token(length int) (string, error) {
 	for i := 0; i < length; i++ {
 		val := binary.BigEndian.Uint32(buf[i*4 : i*4+4])
 		for val >= maxValid {
-			b := make([]byte, 4)
-			if _, err := cryptoRand.Read(b); err != nil {
+			if _, err := cryptoRand.Read(buf[i*4 : i*4+4]); err != nil {
 				return "", err
 			}
-			val = binary.BigEndian.Uint32(b)
+			val = binary.BigEndian.Uint32(buf[i*4 : i*4+4])
 		}
 		builder.WriteByte(SYMBOLS[val%symbolsLen])
 	}
