@@ -3,9 +3,9 @@ package server
 import (
 	"fmt"
 	"math"
+	"net"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/golang/gddo/httputil/header"
@@ -156,14 +156,12 @@ func addThousandSeparator(intStr, thousandStr string) string {
 	return intStr
 }
 
-// Request.RemoteAddress contains port, which we want to remove i.e.:
-// "[::1]:58292" => "[::1]"
 func ipAddrFromRemoteAddr(s string) string {
-	idx := strings.LastIndex(s, ":")
-	if idx == -1 {
+	host, _, err := net.SplitHostPort(s)
+	if err != nil {
 		return s
 	}
-	return s[:idx]
+	return host
 }
 
 func acceptsHTML(hdr http.Header) bool {
