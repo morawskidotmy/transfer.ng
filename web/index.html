@@ -14,17 +14,24 @@
   <meta name="twitter:description" content="Secure file sharing service. Upload and share files easily.">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --discord-blue: #7289da;
+      --discord-white: #ffffff;
+      --discord-steel: #99aab5;
+      --discord-jet: #2c2f33;
+      --discord-shadow: #23272a;
+    }
     body { 
       font-family: "Courier New", monospace; 
-      background: #000; 
-      color: #0f0; 
+      background: var(--discord-shadow); 
+      color: var(--discord-white); 
       padding: 20px;
       line-height: 1.6;
     }
     .container { 
       max-width: 110ch; 
       margin: 0 auto;
-      border: 1px solid #0f0;
+      border: 1px solid var(--discord-blue);
       padding: 20px;
     }
     @media (max-width: 768px) {
@@ -41,7 +48,7 @@
     }
     .header {
       text-align: center;
-      border-bottom: 2px solid #0f0;
+      border-bottom: 2px solid var(--discord-blue);
       padding-bottom: 15px;
       margin-bottom: 20px;
     }
@@ -77,7 +84,7 @@
       .grid { grid-template-columns: 1fr; }
     }
     .section {
-      border: 1px solid #0f0;
+      border: 1px solid var(--discord-steel);
       padding: 15px;
     }
     .section-header {
@@ -95,22 +102,22 @@
       text-transform: uppercase;
       font-size: 0.95em;
       margin: 12px 0 8px 0;
-      border-bottom: 1px dotted #0f0;
+      border-bottom: 1px dotted var(--discord-steel);
       padding-bottom: 4px;
     }
     .label:first-of-type {
       margin-top: 0;
     }
     code { 
-      background: #1a1a1a; 
+      background: var(--discord-jet); 
       padding: 2px 5px;
-      border: 1px solid #0f0;
+      border: 1px solid var(--discord-steel);
       display: inline-block;
     }
     pre {
-      background: #1a1a1a;
+      background: var(--discord-jet);
       padding: 10px;
-      border: 1px solid #0f0;
+      border: 1px solid var(--discord-steel);
       overflow-x: auto;
       margin: 8px 0;
       font-size: 0.8em;
@@ -135,19 +142,19 @@
     }
     .option-name {
       font-weight: bold;
-      color: #0f0;
+      color: var(--discord-blue);
     }
     .option-desc {
       margin-left: 10px;
       opacity: 0.8;
     }
-    a { color: #0f0; text-decoration: underline; }
-    a:hover { background: #0f0; color: #000; }
+    a { color: var(--discord-blue); text-decoration: underline; }
+    a:hover { background: var(--discord-blue); color: var(--discord-white); }
     .server-info {
-      border: 1px solid #0f0;
+      border: 1px solid var(--discord-steel);
       padding: 12px;
       margin-bottom: 20px;
-      background: #0a0a0a;
+      background: var(--discord-jet);
     }
     .info-row {
       margin: 5px 0;
@@ -175,7 +182,7 @@
     }
     .footer {
       text-align: center;
-      border-top: 1px solid #0f0;
+      border-top: 1px solid var(--discord-steel);
       margin-top: 20px;
       padding-top: 10px;
       font-size: 0.85em;
