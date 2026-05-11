@@ -16,27 +16,34 @@
   <meta name="twitter:description" content="{{.Filename}} - {{.ContentLength}} bytes">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --discord-blue: #7289da;
+      --discord-white: #ffffff;
+      --discord-steel: #99aab5;
+      --discord-jet: #2c2f33;
+      --discord-shadow: #23272a;
+    }
     body { 
       font-family: "Courier New", monospace; 
-      background: #000; 
-      color: #0f0; 
+      background: var(--discord-shadow); 
+      color: var(--discord-white); 
       padding: 20px;
       line-height: 1.4;
     }
     .container { 
       max-width: 100ch; 
       margin: 0 auto;
-      border: 1px solid #0f0;
+      border: 1px solid var(--discord-blue);
       padding: 15px;
     }
     .header {
       text-align: center;
-      border-bottom: 1px solid #0f0;
+      border-bottom: 1px solid var(--discord-blue);
       padding-bottom: 10px;
       margin-bottom: 15px;
     }
     .audio-section {
-      border: 1px dashed #0f0;
+      border: 1px dashed var(--discord-steel);
       padding: 15px;
       margin: 15px 0;
       text-align: center;
@@ -64,7 +71,7 @@
       }
     }
     .info-section {
-      border: 1px dashed #0f0;
+      border: 1px dashed var(--discord-steel);
       padding: 10px;
       margin: 15px 0;
     }
@@ -76,9 +83,9 @@
     }
     .info-row { margin: 6px 0; }
     button { 
-      background: #0f0; 
-      color: #000; 
-      border: 1px solid #0f0; 
+      background: var(--discord-blue); 
+      color: var(--discord-white); 
+      border: 1px solid var(--discord-blue); 
       padding: 8px 16px; 
       cursor: pointer;
       font-family: "Courier New", monospace;
@@ -95,13 +102,14 @@
       }
     }
     button:hover { 
-      background: #00cc00;
-      box-shadow: 0 0 5px #0f0;
+      background: var(--discord-steel);
+      color: var(--discord-shadow);
+      box-shadow: 0 0 5px var(--discord-blue);
     }
     code { 
-      background: #1a1a1a; 
+      background: var(--discord-jet); 
       padding: 1px 4px;
-      border: 1px solid #0f0;
+      border: 1px solid var(--discord-steel);
     }
   </style>
 </head>
