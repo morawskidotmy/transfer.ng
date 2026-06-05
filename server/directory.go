@@ -615,7 +615,7 @@ func (s *Server) deleteDirHandler(w http.ResponseWriter, r *http.Request) {
 	s.deleteDirIndex(r.Context(), dirToken)
 
 	w.Header().Set("Content-Type", "text/plain")
-	fmt.Fprintf(w, "Deleted %d file(s) from directory %s\n", deletedCount, dirToken)
+	_, _ = fmt.Fprintf(w, "Deleted %d file(s) from directory %s\n", deletedCount, dirToken)
 }
 
 // dirZipHandler handles GET /{token}/.zip: it downloads all files in a directory
@@ -654,7 +654,7 @@ func (s *Server) dirZipHandler(w http.ResponseWriter, r *http.Request) {
 	commonHeader(w, zipfilename)
 
 	zw := zip.NewWriter(w)
-	defer zw.Close()
+	defer func() { _ = zw.Close() }()
 
 	var addedFiles int
 	for _, entry := range idx.Files {
