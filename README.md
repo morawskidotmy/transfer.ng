@@ -84,9 +84,10 @@ curl --upload-file ./report.pdf \
 ### Upload a whole folder
 
 ```bash
-find ./myfolder -type f -exec \
+find ./myfolder -type f | while read -r f; do
     curl -H "X-Upload-Token: s3cretUploadToken" \
-    --upload-file {} https://transferng.example.com/abcd1234/ \;
+        --upload-file "$f" "https://transferng.example.com/abcd1234/$(basename "$f")"
+done
 ```
 
 ### List a directory
@@ -270,7 +271,7 @@ Add to your `.bashrc` or `.zshrc`:
 ```bash
 transfer() {
     if [ $# -eq 0 ]; then
-        echo "Usage: transfer <file|directory>"
+        echo "Usage: transfer <file|directory> [file2 ...]"
         return 1
     fi
     local response=$(curl --silent --show-error -X POST "https://transfer.morawski.my/dir")
@@ -281,15 +282,18 @@ transfer() {
         return 1
     fi
     echo "Directory: $dir_url"
-    if [ -d "$1" ]; then
-        find "$1" -type f -exec \
+    local arg f
+    for arg in "$@"; do
+        if [ -d "$arg" ]; then
+            find "$arg" -type f | while read -r f; do
+                curl --silent --show-error -H "X-Upload-Token: $upload_token" \
+                    --upload-file "$f" "${dir_url}$(basename "$f")"
+            done
+        else
             curl --silent --show-error -H "X-Upload-Token: $upload_token" \
-            --upload-file {} "${dir_url}" \;
-    else
-        local file_name=$(basename "$1")
-        curl --silent --show-error -H "X-Upload-Token: $upload_token" \
-            --upload-file "$1" "${dir_url}${file_name}"
-    fi
+                --upload-file "$arg" "${dir_url}$(basename "$arg")"
+        fi
+    done
 }
 ```
 
@@ -301,6 +305,9 @@ transfer hello.txt
 
 transfer myfolder/
 # Directory: https://transfer.morawski.my/efgh5678/
+
+transfer file1.txt file2.txt file3.txt
+# Directory: https://transfer.morawski.my/ijkl9012/
 ```
 
 ## Credits
