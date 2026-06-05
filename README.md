@@ -268,13 +268,22 @@ transfer() {
         echo "Usage: transfer <file|directory>"
         return 1
     fi
-    local file_name=$(basename "$1")
+    local response=$(curl --silent --show-error -X POST "https://transfer.morawski.my/dir")
+    local dir_url=$(echo "$response" | sed -n 's/^Directory: //p')
+    local upload_token=$(echo "$response" | sed -n 's/^Upload-Token: //p')
+    if [ -z "$dir_url" ] || [ -z "$upload_token" ]; then
+        echo "Failed to create directory"
+        return 1
+    fi
+    echo "Directory: $dir_url"
     if [ -d "$1" ]; then
-        (cd "$1" && zip -r -q - .) | curl --silent --show-error \
-            --upload-file "-" "https://transferng.example.com/${file_name}.zip"
+        find "$1" -type f -exec \
+            curl --silent --show-error -H "X-Upload-Token: $upload_token" \
+            --upload-file {} "${dir_url}" \;
     else
-        curl --silent --show-error --upload-file "$1" \
-            "https://transferng.example.com/${file_name}"
+        local file_name=$(basename "$1")
+        curl --silent --show-error -H "X-Upload-Token: $upload_token" \
+            --upload-file "$1" "${dir_url}${file_name}"
     fi
 }
 ```
@@ -283,7 +292,10 @@ Usage:
 
 ```bash
 transfer hello.txt
+# Directory: https://transfer.morawski.my/abcd1234/
+
 transfer myfolder/
+# Directory: https://transfer.morawski.my/efgh5678/
 ```
 
 ## Credits
