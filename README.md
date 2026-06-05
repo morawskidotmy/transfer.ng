@@ -276,19 +276,22 @@ transfer() {
         echo "Failed to create directory"
         return 1
     fi
-    echo "Directory: $dir_url"
     local arg f
     for arg in "$@"; do
         if [ -d "$arg" ]; then
             find "$arg" -type f | while read -r f; do
                 curl --silent --show-error -H "X-Upload-Token: $upload_token" \
-                    --upload-file "$f" "${dir_url}$(basename "$f")"
+                    --upload-file "$f" "${dir_url}$(basename "$f")" >/dev/null \
+                    && echo "Uploaded: $(basename "$f")"
             done
+            echo "Folder: $dir_url"
         else
             curl --silent --show-error -H "X-Upload-Token: $upload_token" \
-                --upload-file "$arg" "${dir_url}$(basename "$arg")"
+                --upload-file "$arg" "${dir_url}$(basename "$arg")" >/dev/null \
+                && echo "Uploaded: $(basename "$arg")"
         fi
     done
+    echo "Directory: $dir_url"
 }
 ```
 
@@ -296,12 +299,19 @@ Usage:
 
 ```bash
 transfer hello.txt
+# Uploaded: hello.txt
 # Directory: https://transfer.morawski.my/abcd1234/
 
 transfer myfolder/
+# Uploaded: file1.txt
+# Uploaded: file2.txt
+# Folder: https://transfer.morawski.my/efgh5678/
 # Directory: https://transfer.morawski.my/efgh5678/
 
 transfer file1.txt file2.txt file3.txt
+# Uploaded: file1.txt
+# Uploaded: file2.txt
+# Uploaded: file3.txt
 # Directory: https://transfer.morawski.my/ijkl9012/
 ```
 
