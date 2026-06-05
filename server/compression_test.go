@@ -26,6 +26,21 @@ func (s *suiteCompression) TestCompressionReader(c *C) {
 	c.Assert(rc.Close(), IsNil)
 }
 
+func (s *suiteCompression) TestCompressionReaderCompressed(c *C) {
+	data := []byte("test data for compressed roundtrip")
+
+	compressed, err := CompressBuffer(data)
+	c.Assert(err, IsNil)
+
+	rc, err := NewCompressionReader(io.NopCloser(compressed), true)
+	c.Assert(err, IsNil)
+
+	result, err := io.ReadAll(rc)
+	c.Assert(err, IsNil)
+	c.Assert(result, DeepEquals, data)
+	c.Assert(rc.Close(), IsNil)
+}
+
 func (s *suiteCompression) TestCompressBuffer(c *C) {
 	data := []byte("test data for compression")
 

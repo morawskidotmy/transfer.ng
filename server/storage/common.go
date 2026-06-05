@@ -20,9 +20,8 @@ type Range struct {
 func (r *Range) Range() string {
 	if r.Limit > 0 {
 		return fmt.Sprintf("bytes=%d-%d", r.Start, r.Start+r.Limit-1)
-	} else {
-		return fmt.Sprintf("bytes=%d-", r.Start)
 	}
+	return fmt.Sprintf("bytes=%d-", r.Start)
 }
 
 // AcceptLength Tries to accept given range
@@ -52,7 +51,7 @@ func (r *Range) ContentRange() string {
 	return r.contentRange
 }
 
-var rexp *regexp.Regexp = regexp.MustCompile(`^bytes=([0-9]+)-([0-9]*)$`)
+var rexp = regexp.MustCompile(`^bytes=([0-9]+)-([0-9]*)$`)
 
 // Parses HTTP Range header and returns struct on success
 // only bytes=start-finish supported

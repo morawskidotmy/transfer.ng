@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"io"
 	"testing"
 )
 
@@ -167,4 +168,30 @@ func TestRange_SetContentRange(t *testing.T) {
 
 func TestCloseCheck(t *testing.T) {
 	CloseCheck(nil)
+}
+
+type mockCloser struct {
+	closed bool
+	err    error
+}
+
+func (m *mockCloser) Close() error {
+	m.closed = true
+	return m.err
+}
+
+func TestCloseCheckWithCloser(t *testing.T) {
+	mc := &mockCloser{}
+	CloseCheck(mc)
+	if !mc.closed {
+		t.Errorf("expected closer to be closed")
+	}
+}
+
+func TestCloseCheckWithError(t *testing.T) {
+	mc := &mockCloser{err: io.ErrUnexpectedEOF}
+	CloseCheck(mc)
+	if !mc.closed {
+		t.Errorf("expected closer to be closed even on error")
+	}
 }

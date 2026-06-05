@@ -23,7 +23,7 @@ func TestTokenCharacters(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range tok {
-		if !strings.ContainsRune(SYMBOLS, c) {
+		if !strings.ContainsRune(symbols, c) {
 			t.Errorf("token contains invalid character: %c", c)
 		}
 	}

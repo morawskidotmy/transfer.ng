@@ -82,29 +82,46 @@
       font-size: 0.9em;
     }
     .info-row { margin: 6px 0; }
-    button { 
-      background: var(--discord-blue); 
-      color: var(--discord-white); 
-      border: 1px solid var(--discord-blue); 
-      padding: 8px 16px; 
+    .button-link {
+      display: inline-block;
+      background: var(--discord-blue);
+      color: var(--discord-white);
+      border: 1px solid var(--discord-blue);
+      padding: 8px 16px;
       cursor: pointer;
       font-family: "Courier New", monospace;
       font-weight: bold;
       margin: 8px 4px 8px 0;
       font-size: 0.95em;
+      text-decoration: none;
+    }
+    .button-link:hover {
+      background: var(--discord-steel);
+      color: var(--discord-shadow);
+      box-shadow: 0 0 5px var(--discord-blue);
     }
     @media (max-width: 480px) {
-      button {
+      .button-link {
         display: block;
         width: 100%;
         margin: 8px 0;
         padding: 10px 8px;
+        text-align: center;
       }
     }
-    button:hover { 
-      background: var(--discord-steel);
-      color: var(--discord-shadow);
-      box-shadow: 0 0 5px var(--discord-blue);
+    .link-input {
+      width: 100%;
+      background: var(--discord-jet);
+      color: var(--discord-white);
+      border: 1px solid var(--discord-steel);
+      padding: 8px;
+      font-family: "Courier New", monospace;
+      font-size: 0.9em;
+      margin-top: 4px;
+    }
+    .link-input:focus {
+      outline: none;
+      border-color: var(--discord-blue);
     }
     code { 
       background: var(--discord-jet); 
@@ -135,17 +152,13 @@
 
     <div class="info-section">
       <div class="label">Actions</div>
-      <button onclick="window.location.href='{{.URLGet}}'">[ DOWNLOAD ]</button>
-      <button onclick="copyToClipboard('{{.URLGet}}')">[ COPY LINK ]</button>
+      <a href="{{.URLGet}}" class="button-link">[ DOWNLOAD ]</a>
+    </div>
+
+    <div class="info-section">
+      <div class="label">Direct Link</div>
+      <input type="text" readonly value="{{.URLGet}}" class="link-input" onclick="this.select()">
     </div>
   </div>
-
-  <script>
-    function copyToClipboard(text) {
-      navigator.clipboard.writeText(text).then(() => {
-        alert('Link copied!');
-      });
-    }
-  </script>
 </body>
 </html>

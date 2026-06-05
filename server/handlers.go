@@ -64,7 +64,10 @@ func initTextTemplates() *textTemplate.Template {
 }
 
 func initHTMLTemplates() *htmlTemplate.Template {
-	templateMap := htmlTemplate.FuncMap{"format": formatNumber}
+	templateMap := htmlTemplate.FuncMap{
+		"format": formatNumber,
+		"add":    func(a, b int) int { return a + b },
+	}
 	var templates = htmlTemplate.New("").Funcs(templateMap)
 	return templates
 }
@@ -189,21 +192,15 @@ func (s *Server) respondError(w http.ResponseWriter, status int, publicMsg strin
 	http.Error(w, publicMsg, status)
 }
 
-func canContainsXSS(contentType string) bool {
+func contentTypeMayContainXSS(contentType string) bool {
 	switch {
-	case strings.Contains(contentType, "cache-manifest"):
-		fallthrough
-	case strings.Contains(contentType, "html"):
-		fallthrough
-	case strings.Contains(contentType, "rdf"):
-		fallthrough
-	case strings.Contains(contentType, "vtt"):
-		fallthrough
-	case strings.Contains(contentType, "xml"):
-		fallthrough
-	case strings.Contains(contentType, "xsl"):
-		return true
-	case strings.Contains(contentType, "x-mixed-replace"):
+	case strings.Contains(contentType, "cache-manifest"),
+		strings.Contains(contentType, "html"),
+		strings.Contains(contentType, "rdf"),
+		strings.Contains(contentType, "vtt"),
+		strings.Contains(contentType, "xml"),
+		strings.Contains(contentType, "xsl"),
+		strings.Contains(contentType, "x-mixed-replace"):
 		return true
 	}
 
@@ -252,16 +249,25 @@ func (s *Server) getTextContent(ctx context.Context, token, filename, contentTyp
 	return "", "download.sandbox.html", nil
 }
 
+var botSignatures = []string{
+	"whatsapp",
+	"discordbot",
+	"telegrambot",
+	"twitterbot",
+	"facebookexternalhit",
+	"linkedinbot",
+	"slackbot",
+	"embedly",
+}
+
 func isBotUserAgent(userAgent string) bool {
 	ua := strings.ToLower(userAgent)
-	return strings.Contains(ua, "whatsapp") ||
-		strings.Contains(ua, "discordbot") ||
-		strings.Contains(ua, "telegrambot") ||
-		strings.Contains(ua, "twitterbot") ||
-		strings.Contains(ua, "facebookexternalhit") ||
-		strings.Contains(ua, "linkedinbot") ||
-		strings.Contains(ua, "slackbot") ||
-		strings.Contains(ua, "embedly")
+	for _, sig := range botSignatures {
+		if strings.Contains(ua, sig) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) previewHandler(w http.ResponseWriter, r *http.Request) {
@@ -474,6 +480,9 @@ func validateTokenAndFilename(token, filename string) error {
 	if len(filename) > maxFilenameLength {
 		return fmt.Errorf("filename too long")
 	}
+	if reservedFilenames[filename] {
+		return fmt.Errorf("filename is reserved")
+	}
 	return nil
 }
 
@@ -484,20 +493,26 @@ func (s *Server) postHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	uploadToken, tokenErr := token(s.randomTokenLength)
-	if tokenErr != nil {
-		s.logger.Printf("%s", tokenErr.Error())
-		http.Error(w, "Error occurred generating token", http.StatusInternalServerError)
+	// All files in a single POST are grouped into one directory so they can be
+	// shared together and more files can be added later with the upload token.
+	dirToken, uploadToken, dirErr := s.createDirectory(r.Context())
+	if dirErr != nil {
+		s.logger.Printf("%s", dirErr.Error())
+		http.Error(w, "Error occurred creating directory", http.StatusInternalServerError)
 		return
 	}
 
+	s.writeDirHeaders(w, r, dirToken, uploadToken)
 	w.Header().Set("Content-Type", "text/plain")
 
 	var responseBody strings.Builder
+	responseBody.WriteString("Directory: " + s.directoryURL(r, dirToken) + "\n")
+	responseBody.WriteString("Upload-Token: " + uploadToken + "\n")
+	responseBody.WriteString("\n")
 
 	for _, fHeaders := range r.MultipartForm.File {
 		for _, fHeader := range fHeaders {
-			if !s.processUploadFile(w, r, uploadToken, fHeader, &responseBody) {
+			if !s.processUploadFile(w, r, dirToken, fHeader, &responseBody) {
 				return
 			}
 		}
@@ -509,8 +524,15 @@ func (s *Server) postHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) processUploadFile(w http.ResponseWriter, r *http.Request, uploadToken string, fHeader *multipart.FileHeader, responseBody *strings.Builder) bool {
+func (s *Server) processUploadFile(w http.ResponseWriter, r *http.Request, token string, fHeader *multipart.FileHeader, responseBody *strings.Builder) bool {
 	filename := sanitize(fHeader.Filename)
+
+	if reservedFilenames[filename] {
+		s.logger.Printf("upload: rejected reserved filename: %s", filename)
+		http.Error(w, "Filename is reserved", http.StatusBadRequest)
+		return false
+	}
+
 	contentType := mime.TypeByExtension(filepath.Ext(fHeader.Filename))
 
 	f, err := fHeader.Open()
@@ -539,11 +561,15 @@ func (s *Server) processUploadFile(w http.ResponseWriter, r *http.Request, uploa
 		}
 	}
 
-	if !s.saveFileWithMetadata(w, r, uploadToken, filename, contentType, contentLength, file) {
+	if !s.saveFileWithMetadata(w, r, token, filename, contentType, contentLength, file) {
 		return false
 	}
 
-	return s.addResponseURL(w, r, uploadToken, filename, responseBody)
+	if err := s.registerFileInDir(r.Context(), token, filename, contentLength); err != nil {
+		s.logger.Printf("upload: failed to register file in directory: %v", err)
+	}
+
+	return s.addResponseURL(w, r, token, filename, responseBody)
 }
 
 func (s *Server) copyAndValidateFile(w http.ResponseWriter, file *os.File, f io.Reader) (int64, error) {
@@ -625,7 +651,7 @@ func (s *Server) saveFileWithMetadata(w http.ResponseWriter, r *http.Request, up
 
 func (s *Server) addResponseURL(w http.ResponseWriter, r *http.Request, uploadToken, filename string, responseBody *strings.Builder) bool {
 	escapedFilename := url.PathEscape(filename)
-	metadata, err := metadataForRequest(mime.TypeByExtension(filepath.Ext(filename)), 0, s.randomTokenLength, r)
+	storedMeta, err := s.checkMetadata(r.Context(), uploadToken, filename, false)
 	if err != nil {
 		s.logger.Printf("addResponseURL: %v", err)
 		http.Error(w, "Could not generate response", http.StatusInternalServerError)
@@ -633,7 +659,7 @@ func (s *Server) addResponseURL(w http.ResponseWriter, r *http.Request, uploadTo
 	}
 
 	relativeURL, _ := url.Parse(path.Join(s.proxyPath, uploadToken, escapedFilename))
-	deleteURL, _ := url.Parse(path.Join(s.proxyPath, uploadToken, escapedFilename, metadata.DeletionToken))
+	deleteURL, _ := url.Parse(path.Join(s.proxyPath, uploadToken, escapedFilename, storedMeta.DeletionToken))
 	w.Header().Add("X-Url-Delete", resolveURL(r, deleteURL, s.proxyPort))
 	responseBody.WriteString(getURL(r, s.proxyPort).ResolveReference(relativeURL).String())
 	responseBody.WriteString("\n")
@@ -684,16 +710,16 @@ func metadataForRequest(contentType string, contentLength int64, randomTokenLeng
 		DeletionToken: delToken1 + delToken2,
 	}
 
-	if v := r.Header.Get("Max-Downloads"); v == "" {
-	} else if v, err := strconv.Atoi(v); err != nil {
-	} else {
-		metadata.MaxDownloads = v
+	if v := r.Header.Get("Max-Downloads"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil {
+			metadata.MaxDownloads = parsed
+		}
 	}
 
-	if v := r.Header.Get("Max-Days"); v == "" {
-	} else if v, err := strconv.Atoi(v); err != nil {
-	} else {
-		metadata.MaxDate = time.Now().Add(time.Hour * 24 * time.Duration(v))
+	if v := r.Header.Get("Max-Days"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil {
+			metadata.MaxDate = time.Now().Add(time.Hour * 24 * time.Duration(parsed))
+		}
 	}
 
 	if password := r.Header.Get("X-Encrypt-Password"); password != "" {
@@ -711,6 +737,52 @@ func (s *Server) putHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	filename := sanitize(vars["filename"])
 
+	if reservedFilenames[filename] {
+		s.logger.Printf("put: rejected reserved filename: %s", filename)
+		http.Error(w, "Filename is reserved", http.StatusBadRequest)
+		return
+	}
+
+	putToken, err := token(s.randomTokenLength)
+	if err != nil {
+		s.logger.Printf("%s", err.Error())
+		http.Error(w, "Error occurred generating token", http.StatusInternalServerError)
+		return
+	}
+
+	uploadToken, err := s.makeUploadToken()
+	if err != nil {
+		s.logger.Printf("%s", err.Error())
+		http.Error(w, "Error occurred generating token", http.StatusInternalServerError)
+		return
+	}
+
+	ok, contentLength := s.doPutUpload(w, r, putToken, filename)
+	if !ok {
+		return
+	}
+
+	// Every upload lives in its own directory, even a single file. The upload
+	// token returned to the client allows adding more files to this directory
+	// later via PUT /{token}/{filename} with the X-Upload-Token header.
+	idx := dirIndex{
+		UploadToken: uploadToken,
+		Created:     time.Now(),
+		Files:       []fileEntry{{Name: filename, Size: contentLength}},
+		TotalSize:   contentLength,
+		SizeKnown:   true,
+	}
+	if err := s.saveDirIndex(r.Context(), putToken, idx); err != nil {
+		s.logger.Printf("put: failed to save directory index: %v", err)
+	}
+
+	s.writePutResponse(w, r, putToken, filename, uploadToken)
+}
+
+// doPutUpload buffers (if needed), validates and stores the request body as
+// filename under putToken. It is shared by single-file uploads and uploads that
+// add a file to an existing directory.
+func (s *Server) doPutUpload(w http.ResponseWriter, r *http.Request, putToken, filename string) (bool, int64) {
 	defer storage.CloseCheck(r.Body)
 
 	reader := r.Body
@@ -721,40 +793,32 @@ func (s *Server) putHandler(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			s.logger.Printf("put: failed to create temp file: %v", err)
 			http.Error(w, "Could not process upload.", http.StatusInternalServerError)
-			return
+			return false, 0
 		}
 		defer s.cleanTmpFile(file)
 
 		var bufferErr error
 		contentLength, bufferErr = s.bufferFileToTemp(w, file, r.Body)
 		if bufferErr != nil {
-			return
+			return false, 0
 		}
 
 		if s.performClamavPrescan && !s.runVirusScan(w, file.Name()) {
-			return
+			return false, 0
 		}
 
 		reader = file
 	}
 
 	if !s.validateUploadSize(w, contentLength) {
-		return
+		return false, 0
 	}
 
-	contentType := mime.TypeByExtension(filepath.Ext(vars["filename"]))
-	putToken, err := token(s.randomTokenLength)
-	if err != nil {
-		s.logger.Printf("%s", err.Error())
-		http.Error(w, "Error occurred generating token", http.StatusInternalServerError)
-		return
-	}
-
+	contentType := mime.TypeByExtension(filepath.Ext(filename))
 	if !s.processPutUpload(w, r, putToken, filename, contentType, contentLength, reader) {
-		return
+		return false, 0
 	}
-
-	s.writePutResponse(w, r, putToken, filename)
+	return true, contentLength
 }
 
 func (s *Server) bufferFileToTemp(w http.ResponseWriter, file *os.File, requestBody io.Reader) (int64, error) {
@@ -871,8 +935,8 @@ func (s *Server) compressAndUpdate(w http.ResponseWriter, reader *io.ReadCloser,
 	return true
 }
 
-func (s *Server) writePutResponse(w http.ResponseWriter, r *http.Request, putToken, filename string) bool {
-	metadata, err := metadataForRequest(mime.TypeByExtension(filepath.Ext(filename)), 0, s.randomTokenLength, r)
+func (s *Server) writePutResponse(w http.ResponseWriter, r *http.Request, putToken, filename, uploadToken string) bool {
+	storedMeta, err := s.checkMetadata(r.Context(), putToken, filename, false)
 	if err != nil {
 		s.logger.Printf("writePutResponse: %v", err)
 		http.Error(w, "Could not generate response", http.StatusInternalServerError)
@@ -882,17 +946,19 @@ func (s *Server) writePutResponse(w http.ResponseWriter, r *http.Request, putTok
 	w.Header().Set("Content-Type", "text/plain")
 	escapedFilename := url.PathEscape(filename)
 	relativeURL, _ := url.Parse(path.Join(s.proxyPath, putToken, escapedFilename))
-	deleteURL, _ := url.Parse(path.Join(s.proxyPath, putToken, escapedFilename, metadata.DeletionToken))
+	deleteURL, _ := url.Parse(path.Join(s.proxyPath, putToken, escapedFilename, storedMeta.DeletionToken))
 
 	w.Header().Set("X-Url-Delete", resolveURL(r, deleteURL, s.proxyPort))
+	s.writeDirHeaders(w, r, putToken, uploadToken)
 	_, _ = w.Write([]byte(resolveURL(r, relativeURL, s.proxyPort)))
 	return true
 }
 
 func resolveURL(r *http.Request, u *url.URL, proxyPort string) string {
-	r.URL.Path = ""
+	cloned := cloneURL(r.URL)
+	cloned.Path = ""
 
-	return getURL(r, proxyPort).ResolveReference(u).String()
+	return getURL(&http.Request{URL: cloned, Host: r.Host, Header: r.Header, TLS: r.TLS}, proxyPort).ResolveReference(u).String()
 }
 
 func resolveKey(key, proxyPath string) string {
@@ -907,21 +973,12 @@ func resolveKey(key, proxyPath string) string {
 
 func resolveWebAddress(r *http.Request, proxyPath string, proxyPort string) string {
 	rUrl := getURL(r, proxyPort)
-
-	var webAddress string
+	resolved := rUrl.ResolveReference(rUrl)
 
 	if len(proxyPath) == 0 {
-		webAddress = fmt.Sprintf("%s://%s/",
-			rUrl.ResolveReference(rUrl).Scheme,
-			rUrl.ResolveReference(rUrl).Host)
-	} else {
-		webAddress = fmt.Sprintf("%s://%s/%s",
-			rUrl.ResolveReference(rUrl).Scheme,
-			rUrl.ResolveReference(rUrl).Host,
-			strings.TrimPrefix(proxyPath, "/"))
+		return fmt.Sprintf("%s://%s/", resolved.Scheme, resolved.Host)
 	}
-
-	return webAddress
+	return fmt.Sprintf("%s://%s/%s", resolved.Scheme, resolved.Host, strings.TrimPrefix(proxyPath, "/"))
 }
 
 // Similar to the logic found here:
@@ -966,16 +1023,10 @@ func getURL(r *http.Request, proxyPort string) *url.URL {
 		port = proxyPort
 	}
 
-	if len(port) == 0 {
+	if len(port) == 0 || (port == "80" && u.Scheme == "http") || (port == "443" && u.Scheme == "https") {
 		u.Host = host
 	} else {
-		if port == "80" && u.Scheme == "http" {
-			u.Host = host
-		} else if port == "443" && u.Scheme == "https" {
-			u.Host = host
-		} else {
-			u.Host = net.JoinHostPort(host, port)
-		}
+		u.Host = net.JoinHostPort(host, port)
 	}
 
 	return u
@@ -1028,17 +1079,21 @@ func (s *Server) checkMetadata(ctx context.Context, token, filename string, incr
 
 	if err := json.NewDecoder(r).Decode(&metadata); err != nil {
 		return metadata, err
-	} else if metadata.MaxDownloads != -1 && metadata.Downloads >= metadata.MaxDownloads {
+	}
+	if metadata.MaxDownloads != -1 && metadata.Downloads >= metadata.MaxDownloads {
 		return metadata, errors.New("maxDownloads expired")
-	} else if !metadata.MaxDate.IsZero() && time.Now().After(metadata.MaxDate) {
+	}
+	if !metadata.MaxDate.IsZero() && time.Now().After(metadata.MaxDate) {
 		return metadata, errors.New("maxDate expired")
-	} else if metadata.MaxDownloads != -1 && increaseDownload {
+	}
+	if metadata.MaxDownloads != -1 && increaseDownload {
 		metadata.Downloads++
 
 		buffer := &bytes.Buffer{}
 		if err := json.NewEncoder(buffer).Encode(metadata); err != nil {
 			return metadata, errors.New("could not encode metadata")
-		} else if err := s.storage.Put(ctx, token, fmt.Sprintf("%s.metadata", filename), buffer, "text/json", uint64(buffer.Len())); err != nil {
+		}
+		if err := s.storage.Put(ctx, token, fmt.Sprintf("%s.metadata", filename), buffer, "text/json", uint64(buffer.Len())); err != nil {
 			return metadata, errors.New("could not save metadata")
 		}
 	}
@@ -1055,14 +1110,16 @@ func (s *Server) checkDeletionToken(ctx context.Context, deletionToken, token, f
 	r, _, err := s.storage.Get(ctx, token, fmt.Sprintf("%s.metadata", filename), nil)
 	if s.storage.IsNotExist(err) {
 		return errors.New("metadata doesn't exist")
-	} else if err != nil {
+	}
+	if err != nil {
 		return err
 	}
 	defer storage.CloseCheck(r)
 
 	if err := json.NewDecoder(r).Decode(&metadata); err != nil {
 		return err
-	} else if subtle.ConstantTimeCompare([]byte(metadata.DeletionToken), []byte(deletionToken)) != 1 {
+	}
+	if subtle.ConstantTimeCompare([]byte(metadata.DeletionToken), []byte(deletionToken)) != 1 {
 		return errors.New("deletion token doesn't match")
 	}
 
@@ -1116,6 +1173,12 @@ func (s *Server) deleteHandler(w http.ResponseWriter, r *http.Request) {
 		s.respondError(w, http.StatusInternalServerError, "Could not delete file.", "%v", err)
 		return
 	}
+
+	if metaErr := s.storage.Delete(r.Context(), token, fmt.Sprintf("%s.metadata", filename)); metaErr != nil && !s.storage.IsNotExist(metaErr) {
+		s.logger.Printf("delete: failed to delete metadata for %s/%s: %v", token, filename, metaErr)
+	}
+
+	s.unregisterFileFromDir(r.Context(), token, filename)
 }
 
 type archiveFileSpec struct {
@@ -1148,6 +1211,33 @@ func (s *Server) parseArchiveFiles(filesSpec string) ([]archiveFileSpec, error) 
 	return specs, nil
 }
 
+func (s *Server) fetchFileForArchive(ctx context.Context, token, filename string) (io.ReadCloser, uint64, error) {
+	meta, err := s.checkMetadata(ctx, token, filename, true)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	reader, contentLength, err := s.storage.Get(ctx, token, filename, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if meta.Compressed {
+		cr, crErr := NewCompressionReader(reader, true)
+		if crErr != nil {
+			storage.CloseCheck(reader)
+			return nil, 0, crErr
+		}
+		size := contentLength
+		if meta.ContentLength > 0 {
+			size = uint64(meta.ContentLength)
+		}
+		return cr, size, nil
+	}
+
+	return reader, contentLength, nil
+}
+
 func (s *Server) zipHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 
@@ -1165,19 +1255,10 @@ func (s *Server) zipHandler(w http.ResponseWriter, r *http.Request) {
 	zw := zip.NewWriter(w)
 
 	for _, spec := range specs {
-		if _, err := s.checkMetadata(r.Context(), spec.token, spec.filename, true); err != nil {
-			s.logger.Printf("Error metadata: %s", err.Error())
-			continue
-		}
-
-		reader, _, err := s.storage.Get(r.Context(), spec.token, spec.filename, nil)
+		reader, _, err := s.fetchFileForArchive(r.Context(), spec.token, spec.filename)
 		if err != nil {
-			if s.storage.IsNotExist(err) {
-				s.respondError(w, http.StatusNotFound, "File not found", "")
-				return
-			}
-			s.respondError(w, http.StatusInternalServerError, "Could not retrieve file.", "%v", err)
-			return
+			s.logger.Printf("zip: skipping %s/%s: %v", spec.token, spec.filename, err)
+			continue
 		}
 
 		header := &zip.FileHeader{
@@ -1189,15 +1270,15 @@ func (s *Server) zipHandler(w http.ResponseWriter, r *http.Request) {
 		fw, err := zw.CreateHeader(header)
 		if err != nil {
 			storage.CloseCheck(reader)
-			s.respondError(w, http.StatusInternalServerError, "", "%v", err)
-			return
+			s.logger.Printf("zip: failed to create entry for %s: %v", spec.filename, err)
+			continue
 		}
 
 		_, err = io.Copy(fw, reader)
 		storage.CloseCheck(reader)
 		if err != nil {
-			s.respondError(w, http.StatusInternalServerError, "", "%v", err)
-			return
+			s.logger.Printf("zip: failed to copy %s: %v", spec.filename, err)
+			continue
 		}
 	}
 
@@ -1228,19 +1309,10 @@ func (s *Server) tarGzHandler(w http.ResponseWriter, r *http.Request) {
 	defer storage.CloseCheck(zw)
 
 	for _, spec := range specs {
-		if _, err := s.checkMetadata(r.Context(), spec.token, spec.filename, true); err != nil {
-			s.logger.Printf("Error metadata: %s", err.Error())
-			continue
-		}
-
-		reader, contentLength, err := s.storage.Get(r.Context(), spec.token, spec.filename, nil)
+		reader, contentLength, err := s.fetchFileForArchive(r.Context(), spec.token, spec.filename)
 		if err != nil {
-			if s.storage.IsNotExist(err) {
-				s.respondError(w, http.StatusNotFound, "File not found", "")
-				return
-			}
-			s.respondError(w, http.StatusInternalServerError, "Could not retrieve file.", "%v", err)
-			return
+			s.logger.Printf("tarGz: skipping %s/%s: %v", spec.token, spec.filename, err)
+			continue
 		}
 
 		header := &tar.Header{
@@ -1248,18 +1320,17 @@ func (s *Server) tarGzHandler(w http.ResponseWriter, r *http.Request) {
 			Size: int64(contentLength),
 		}
 
-		err = zw.WriteHeader(header)
-		if err != nil {
+		if err := zw.WriteHeader(header); err != nil {
 			storage.CloseCheck(reader)
-			s.respondError(w, http.StatusInternalServerError, "", "%v", err)
-			return
+			s.logger.Printf("tarGz: failed to write header for %s: %v", spec.filename, err)
+			continue
 		}
 
 		_, err = io.Copy(zw, reader)
 		storage.CloseCheck(reader)
 		if err != nil {
-			s.respondError(w, http.StatusInternalServerError, "", "%v", err)
-			return
+			s.logger.Printf("tarGz: failed to copy %s: %v", spec.filename, err)
+			continue
 		}
 	}
 }
@@ -1282,19 +1353,10 @@ func (s *Server) tarHandler(w http.ResponseWriter, r *http.Request) {
 	defer storage.CloseCheck(zw)
 
 	for _, spec := range specs {
-		if _, err := s.checkMetadata(r.Context(), spec.token, spec.filename, true); err != nil {
-			s.logger.Printf("Error metadata: %s", err.Error())
-			continue
-		}
-
-		reader, contentLength, err := s.storage.Get(r.Context(), spec.token, spec.filename, nil)
+		reader, contentLength, err := s.fetchFileForArchive(r.Context(), spec.token, spec.filename)
 		if err != nil {
-			if s.storage.IsNotExist(err) {
-				s.respondError(w, http.StatusNotFound, "File not found", "")
-				return
-			}
-			s.respondError(w, http.StatusInternalServerError, "Could not retrieve file.", "%v", err)
-			return
+			s.logger.Printf("tar: skipping %s/%s: %v", spec.token, spec.filename, err)
+			continue
 		}
 
 		header := &tar.Header{
@@ -1302,18 +1364,17 @@ func (s *Server) tarHandler(w http.ResponseWriter, r *http.Request) {
 			Size: int64(contentLength),
 		}
 
-		err = zw.WriteHeader(header)
-		if err != nil {
+		if err := zw.WriteHeader(header); err != nil {
 			storage.CloseCheck(reader)
-			s.respondError(w, http.StatusInternalServerError, "", "%v", err)
-			return
+			s.logger.Printf("tar: failed to write header for %s: %v", spec.filename, err)
+			continue
 		}
 
 		_, err = io.Copy(zw, reader)
 		storage.CloseCheck(reader)
 		if err != nil {
-			s.respondError(w, http.StatusInternalServerError, "", "%v", err)
-			return
+			s.logger.Printf("tar: failed to copy %s: %v", spec.filename, err)
+			continue
 		}
 	}
 }
@@ -1341,7 +1402,8 @@ func (s *Server) headHandler(w http.ResponseWriter, r *http.Request) {
 	if s.storage.IsNotExist(err) {
 		s.respondError(w, http.StatusNotFound, "", "")
 		return
-	} else if err != nil {
+	}
+	if err != nil {
 		s.respondError(w, http.StatusInternalServerError, "Could not retrieve file.", "%v", err)
 		return
 	}
@@ -1385,7 +1447,8 @@ func (s *Server) getHandler(w http.ResponseWriter, r *http.Request) {
 	if s.storage.IsNotExist(err) {
 		s.respondError(w, http.StatusNotFound, "", "")
 		return
-	} else if err != nil {
+	}
+	if err != nil {
 		s.respondError(w, http.StatusInternalServerError, "Could not retrieve file.", "%v", err)
 		return
 	}
@@ -1419,7 +1482,7 @@ func (s *Server) getHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusPartialContent)
 	}
 
-	if disposition == "inline" && canContainsXSS(contentType) {
+	if disposition == "inline" && contentTypeMayContainXSS(contentType) {
 		reader = io.NopCloser(bluemonday.UGCPolicy().SanitizeReader(reader))
 	}
 
@@ -1492,15 +1555,13 @@ func commonHeader(w http.ResponseWriter, filename string) {
 // RedirectHandler handles redirect
 func (s *Server) RedirectHandler(h http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.forceHTTPS {
-			// we don't want to enforce https
-		} else if r.URL.Path == "/health.html" {
-			// health check url won't redirect
-		} else if strings.HasSuffix(ipAddrFromRemoteAddr(r.Host), ".onion") {
-			// .onion addresses cannot get a valid certificate, so don't redirect
-		} else if r.Header.Get("X-Forwarded-Proto") == "https" {
-		} else if r.TLS != nil {
-		} else {
+		shouldRedirect := s.forceHTTPS &&
+			r.URL.Path != "/health.html" &&
+			!strings.HasSuffix(ipAddrFromRemoteAddr(r.Host), ".onion") &&
+			r.Header.Get("X-Forwarded-Proto") != "https" &&
+			r.TLS == nil
+
+		if shouldRedirect {
 			u := getURL(r, s.proxyPort)
 			u.Scheme = "https"
 			if len(s.proxyPort) == 0 && len(s.TLSListenerString) > 0 {

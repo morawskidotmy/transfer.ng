@@ -176,6 +176,8 @@ func acceptsHTML(hdr http.Header) bool {
 	return false
 }
 
+var sizeSuffixes = [5]string{"B", "KB", "MB", "GB", "TB"}
+
 func formatSize(size int64) string {
 	if size <= 0 {
 		return "0 B"
@@ -186,29 +188,20 @@ func formatSize(size int64) string {
 
 	sizeOn := math.Pow(1024, base-math.Floor(base))
 
-	var round float64
-	pow := math.Pow(10, float64(2))
+	pow := 100.0
 	digit := pow * sizeOn
-	round = math.Floor(digit)
+	round := math.Floor(digit)
 
 	newVal := round / pow
-
-	var suffixes [5]string
-	suffixes[0] = "B"
-	suffixes[1] = "KB"
-	suffixes[2] = "MB"
-	suffixes[3] = "GB"
-	suffixes[4] = "TB"
 
 	idx := int(math.Floor(base))
 	if idx < 0 {
 		idx = 0
-	} else if idx >= len(suffixes) {
-		idx = len(suffixes) - 1
+	} else if idx >= len(sizeSuffixes) {
+		idx = len(sizeSuffixes) - 1
 	}
 
-	getSuffix := suffixes[idx]
-	return fmt.Sprintf("%s %s", strconv.FormatFloat(newVal, 'f', -1, 64), getSuffix)
+	return fmt.Sprintf("%s %s", strconv.FormatFloat(newVal, 'f', -1, 64), sizeSuffixes[idx])
 }
 
 func formatDurationDays(durationDays time.Duration) string {

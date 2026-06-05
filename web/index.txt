@@ -12,6 +12,33 @@ UPLOAD FILE
 ===========
 curl --upload-file ./file.txt {{.WebAddress}}file.txt
 
+DIRECTORIES (FOLDERS)
+=====================
+Every upload lands in a directory. Create one and get an upload token:
+curl -X POST {{.WebAddress}}dir
+
+Add files to it (works from any machine):
+curl --upload-file ./file.txt {{.WebAddress}}TOKEN/file.txt \
+  -H "X-Upload-Token: SECRET"
+
+Upload a whole folder:
+find ./myfolder -type f -exec \
+  curl -H "X-Upload-Token: SECRET" \
+  --upload-file {} {{.WebAddress}}TOKEN/ \;
+
+List a directory:
+curl {{.WebAddress}}TOKEN/
+
+Download all files as zip:
+curl -O {{.WebAddress}}TOKEN/.zip
+
+Download all files as tar.gz:
+curl -O {{.WebAddress}}TOKEN/.tar.gz
+
+Delete a directory and all its files:
+curl -X DELETE {{.WebAddress}}TOKEN/ \
+  -H "X-Upload-Token: SECRET"
+
 UPLOAD WITH OPTIONS
 ===================
 curl -T file.txt {{.WebAddress}}file.txt \
@@ -37,11 +64,14 @@ Max-Days:           days until file expires
 X-Encrypt-Password: encrypt file with aes256 on upload
 X-Decrypt-Password: decrypt file on download
 X-Deletion-Token:   token to delete file (header alternative)
+X-Upload-Token:     write-secret to add files to an existing directory
 Range:              request partial content (bytes=0-1023)
 
 RESPONSE HEADERS
 ================
 X-Url-Delete:          full url to delete the file
+X-Url-Directory:       listing url of the directory the file is in
+X-Upload-Token:        write-secret to add more files to that directory
 X-Remaining-Downloads: downloads left before expiry
 X-Remaining-Days:      days left before expiry
 Content-Disposition:   attachment or inline with filename

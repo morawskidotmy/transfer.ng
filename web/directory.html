@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Directory {{.Token}}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --discord-blue: #7289da;
+      --discord-white: #ffffff;
+      --discord-steel: #99aab5;
+      --discord-shadow: #23272a;
+    }
+    body {
+      font-family: "Courier New", monospace;
+      background: var(--discord-shadow);
+      color: var(--discord-white);
+      padding: 20px;
+      line-height: 1.6;
+    }
+    .container {
+      max-width: 110ch;
+      margin: 0 auto;
+      border: 1px solid var(--discord-blue);
+      padding: 20px;
+    }
+    .header {
+      text-align: center;
+      border-bottom: 2px solid var(--discord-blue);
+      padding-bottom: 15px;
+      margin-bottom: 20px;
+    }
+    .title { font-size: 1.4em; font-weight: bold; color: var(--discord-blue); }
+    .subtitle { color: var(--discord-steel); font-size: 0.9em; }
+    ul.files { list-style: none; }
+    ul.files li {
+      padding: 8px 0;
+      border-bottom: 1px solid #36393f;
+      word-break: break-all;
+    }
+    ul.files li a { color: var(--discord-white); text-decoration: none; }
+    ul.files li a:hover { color: var(--discord-blue); text-decoration: underline; }
+    .empty { color: var(--discord-steel); padding: 12px 0; }
+    .count { color: var(--discord-steel); font-size: 0.85em; margin-bottom: 10px; }
+    .pagination {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 10px;
+      margin-top: 20px;
+      padding-top: 15px;
+      border-top: 1px solid #36393f;
+    }
+    .pagination a {
+      color: var(--discord-blue);
+      text-decoration: none;
+      padding: 5px 10px;
+      border: 1px solid var(--discord-blue);
+    }
+    .pagination a:hover {
+      background: var(--discord-blue);
+      color: var(--discord-white);
+    }
+    .pagination .disabled {
+      color: var(--discord-steel);
+      border-color: var(--discord-steel);
+      cursor: not-allowed;
+    }
+    .pagination .current {
+      color: var(--discord-white);
+      padding: 5px 10px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="title">[ DIRECTORY ]</div>
+      <div class="subtitle">{{.Token}}</div>
+    </div>
+
+    <div class="count">
+      {{if .Limit}}
+        Showing {{len .Files}} of {{.TotalFiles}} file(s) (page {{.Page}} of {{.TotalPages}})
+      {{else}}
+        {{.TotalFiles}} file(s)
+      {{end}}
+    </div>
+
+    {{if .Files}}
+    <ul class="files">
+      {{range .Files}}
+      <li><a href="{{.URL}}">{{.Name}}</a></li>
+      {{end}}
+    </ul>
+
+    {{if and .Limit (gt .TotalPages 1)}}
+    <div class="pagination">
+      {{if gt .Page 1}}
+        <a href="?page={{.Page | add -1}}&limit={{.Limit}}">[ PREV ]</a>
+      {{else}}
+        <span class="disabled">[ PREV ]</span>
+      {{end}}
+
+      <span class="current">{{.Page}} / {{.TotalPages}}</span>
+
+      {{if lt .Page .TotalPages}}
+        <a href="?page={{.Page | add 1}}&limit={{.Limit}}">[ NEXT ]</a>
+      {{else}}
+        <span class="disabled">[ NEXT ]</span>
+      {{end}}
+    </div>
+    {{end}}
+
+    {{else}}
+    <div class="empty">This directory is empty.</div>
+    {{end}}
+  </div>
+</body>
+</html>
