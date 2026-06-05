@@ -8,14 +8,14 @@ import (
 )
 
 const (
-	SYMBOLS = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	symbols = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 )
 
 func token(length int) (string, error) {
 	var builder strings.Builder
 	builder.Grow(length)
 
-	symbolsLen := uint32(len(SYMBOLS))
+	symbolsLen := uint32(len(symbols))
 	maxValid := (math.MaxUint32 / symbolsLen) * symbolsLen
 
 	buf := make([]byte, length*4)
@@ -31,7 +31,7 @@ func token(length int) (string, error) {
 			}
 			val = binary.BigEndian.Uint32(buf[i*4 : i*4+4])
 		}
-		builder.WriteByte(SYMBOLS[val%symbolsLen])
+		builder.WriteByte(symbols[val%symbolsLen])
 	}
 
 	return builder.String(), nil

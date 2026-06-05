@@ -229,12 +229,38 @@
         </div>
         <pre>curl --upload-file ./file.txt {{.WebAddress}}file.txt</pre>
 
-        <div class="label">Multiple Files</div>
+        <div class="label">Folders / Directories</div>
         <div class="description">
-          Upload multiple files at once:
+          Every upload lands in a directory. Create one and get an upload token
+          to add files to it (even from other machines):
         </div>
-        <pre>curl --upload-file ./file1.txt {{.WebAddress}}file1.txt
-curl --upload-file ./file2.txt {{.WebAddress}}file2.txt</pre>
+        <pre>curl -X POST {{.WebAddress}}dir
+# Directory:    {{.WebAddress}}TOKEN/
+# Upload-Token: SECRET</pre>
+        <div class="description">
+          Add files to that directory:
+        </div>
+        <pre>curl --upload-file ./file.txt {{.WebAddress}}TOKEN/file.txt \
+  -H "X-Upload-Token: SECRET"</pre>
+        <div class="description">
+          Upload a whole folder at once:
+        </div>
+        <pre>find ./myfolder -type f -exec \
+  curl -H "X-Upload-Token: SECRET" \
+  --upload-file {} {{.WebAddress}}TOKEN/ \;</pre>
+        <div class="description">
+          List the files in a directory:
+        </div>
+        <pre>curl {{.WebAddress}}TOKEN/</pre>
+        <div class="description">
+          Download all files as a zip archive:
+        </div>
+        <pre>curl -O {{.WebAddress}}TOKEN/.zip</pre>
+        <div class="description">
+          Delete a directory and all its files:
+        </div>
+        <pre>curl -X DELETE {{.WebAddress}}TOKEN/ \
+  -H "X-Upload-Token: SECRET"</pre>
 
         <div class="label">Upload from Stdin</div>
         <div class="description">

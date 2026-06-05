@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	_ "embed"
+	"encoding/json"
 	"errors"
 	htmlTemplate "html/template"
 	"log"
@@ -120,7 +122,7 @@ func ProfileListener(s string) OptionFn {
 func WebPath(s string) OptionFn {
 	return func(srvr *Server) {
 		if len(s) > 0 && s[len(s)-1:] != "/" {
-			s = filepath.Join(s, "")
+			s += "/"
 		}
 
 		srvr.webPath = s
@@ -131,7 +133,7 @@ func WebPath(s string) OptionFn {
 func ProxyPath(s string) OptionFn {
 	return func(srvr *Server) {
 		if len(s) > 0 && s[len(s)-1:] != "/" {
-			s = filepath.Join(s, "")
+			s += "/"
 		}
 
 		srvr.proxyPath = s
@@ -149,7 +151,7 @@ func ProxyPort(s string) OptionFn {
 func TempPath(s string) OptionFn {
 	return func(srvr *Server) {
 		if len(s) > 0 && s[len(s)-1:] != "/" {
-			s = filepath.Join(s, "")
+			s += "/"
 		}
 
 		srvr.tempPath = s
@@ -208,6 +210,18 @@ func CompressionThreshold(bytes int64) OptionFn {
 func MaxArchiveFiles(count int) OptionFn {
 	return func(srvr *Server) {
 		srvr.maxArchiveFiles = count
+	}
+}
+
+func MaxDirSize(size int64) OptionFn {
+	return func(srvr *Server) {
+		srvr.maxDirSize = size
+	}
+}
+
+func MaxDirFiles(count int) OptionFn {
+	return func(srvr *Server) {
+		srvr.maxDirFiles = count
 	}
 }
 
@@ -387,6 +401,8 @@ type Server struct {
 
 	compressionThreshold int64
 	maxArchiveFiles      int
+	maxDirSize           int64 // Maximum total size of files in a directory (0 = unlimited)
+	maxDirFiles          int   // Maximum number of files in a directory (0 = unlimited)
 }
 
 // New is the factory fot Server
@@ -402,290 +418,16 @@ func New(options ...OptionFn) (*Server, error) {
 	return s, nil
 }
 
-// Run starts Server
+//go:embed mime_types.json
+var mimeTypesJSON []byte
+
 func registerMimeTypes() {
-	mimeTypes := [][2]string{
-		{".md", "text/x-markdown"},
-		{".markdown", "text/x-markdown"},
-		{".mdown", "text/x-markdown"},
-		{".mkdown", "text/x-markdown"},
-		{".mkd", "text/x-markdown"},
-		{".mdx", "text/x-markdown"},
-		{".conf", "text/plain"},
-		{".config", "text/plain"},
-		{".cfg", "text/plain"},
-		{".ini", "text/plain"},
-		{".toml", "text/plain"},
-		{".properties", "text/plain"},
-		{".gradle.properties", "text/plain"},
-		{".maven.properties", "text/plain"},
-		{".yml", "text/yaml"},
-		{".yaml", "text/yaml"},
-		{".json", "application/json"},
-		{".jsonld", "application/ld+json"},
-		{".json5", "application/json"},
-		{".geojson", "application/geo+json"},
-		{".xml", "application/xml"},
-		{".xsl", "application/xml"},
-		{".xslt", "application/xml"},
-		{".svg", "image/svg+xml"},
-		{".plist", "application/x-plist"},
-		{".sh", "text/x-shellscript"},
-		{".bash", "text/x-shellscript"},
-		{".zsh", "text/x-shellscript"},
-		{".fish", "text/x-shellscript"},
-		{".ksh", "text/x-shellscript"},
-		{".csh", "text/x-shellscript"},
-		{".tcsh", "text/x-shellscript"},
-		{".ash", "text/x-shellscript"},
-		{".ps1", "text/x-powershell"},
-		{".psd1", "text/x-powershell"},
-		{".psm1", "text/x-powershell"},
-		{".bat", "text/x-batch"},
-		{".cmd", "text/x-batch"},
-		{".sql", "text/x-sql"},
-		{".sqlite", "text/x-sql"},
-		{".plsql", "text/x-sql"},
-		{".tsql", "text/x-sql"},
-		{".env", "text/plain"},
-		{".env.example", "text/plain"},
-		{".env.local", "text/plain"},
-		{".env.development", "text/plain"},
-		{".env.production", "text/plain"},
-		{".editorconfig", "text/plain"},
-		{".gitconfig", "text/plain"},
-		{".gitignore", "text/plain"},
-		{".gitattributes", "text/plain"},
-		{".dockerignore", "text/plain"},
-		{".dockerfile", "text/x-dockerfile"},
-		{".Dockerfile", "text/x-dockerfile"},
-		{".py", "text/x-python"},
-		{".pyw", "text/x-python"},
-		{".pyx", "text/x-python"},
-		{".pyi", "text/x-python"},
-		{".rb", "text/x-ruby"},
-		{".rbw", "text/x-ruby"},
-		{".rake", "text/x-ruby"},
-		{".gemspec", "text/x-ruby"},
-		{".go", "text/x-go"},
-		{".rs", "text/x-rust"},
-		{".java", "text/x-java"},
-		{".class", "application/x-java-applet"},
-		{".jar", "application/x-java-archive"},
-		{".c", "text/x-csrc"},
-		{".cc", "text/x-c++src"},
-		{".cpp", "text/x-c++src"},
-		{".cxx", "text/x-c++src"},
-		{".c++", "text/x-c++src"},
-		{".h", "text/x-csrc"},
-		{".hh", "text/x-c++src"},
-		{".hpp", "text/x-c++src"},
-		{".hxx", "text/x-c++src"},
-		{".h++", "text/x-c++src"},
-		{".hpp", "text/x-c++src"},
-		{".hxx", "text/x-c++src"},
-		{".h++", "text/x-c++src"},
-		{".cs", "text/x-csharp"},
-		{".csx", "text/x-csharp"},
-		{".csproj", "application/xml"},
-		{".vb", "text/x-vbnet"},
-		{".vbproj", "application/xml"},
-		{".fsx", "text/x-fsharp"},
-		{".fsi", "text/x-fsharp"},
-		{".fsproj", "application/xml"},
-		{".swift", "text/x-swift"},
-		{".kt", "text/x-kotlin"},
-		{".kts", "text/x-kotlin"},
-		{".groovy", "text/x-groovy"},
-		{".gradle", "text/x-groovy"},
-		{".lua", "text/x-lua"},
-		{".pl", "text/x-perl"},
-		{".pm", "text/x-perl"},
-		{".php", "text/x-php"},
-		{".phtml", "text/x-php"},
-		{".php3", "text/x-php"},
-		{".php4", "text/x-php"},
-		{".php5", "text/x-php"},
-		{".php7", "text/x-php"},
-		{".php8", "text/x-php"},
-		{".asp", "text/x-asp"},
-		{".aspx", "text/x-asp"},
-		{".asmx", "text/x-asp"},
-		{".ascx", "text/x-asp"},
-		{".master", "text/x-asp"},
-		{".asax", "text/x-asp"},
-		{".asacx", "text/x-asp"},
-		{".handlebars", "text/x-handlebars"},
-		{".hbs", "text/x-handlebars"},
-		{".js", "text/javascript"},
-		{".template", "text/plain"},
-		{".jinja", "text/x-jinja"},
-		{".jinja2", "text/x-jinja"},
-		{".j2", "text/x-jinja"},
-		{".makefile", "text/x-makefile"},
-		{".Makefile", "text/x-makefile"},
-		{".cmake", "text/x-cmake"},
-		{".CMakeLists.txt", "text/x-cmake"},
-		{".gradle", "text/x-gradle"},
-		{".maven", "text/x-maven"},
-		{".pom", "text/x-maven"},
-		{".npm", "text/plain"},
-		{".yarn", "text/plain"},
-		{".requirements.txt", "text/plain"},
-		{".Gemfile", "text/x-ruby"},
-		{".Rakefile", "text/x-ruby"},
-		{".Procfile", "text/plain"},
-		{".lock", "text/plain"},
-		{".log", "text/plain"},
-		{".txt", "text/plain"},
-		{".text", "text/plain"},
-		{".csv", "text/csv"},
-		{".tsv", "text/tab-separated-values"},
-		{".psv", "text/plain"},
-		{".md5", "text/plain"},
-		{".sha1", "text/plain"},
-		{".sha256", "text/plain"},
-		{".sha512", "text/plain"},
-		{".checksum", "text/plain"},
-		{".gpg", "application/pgp-encrypted"},
-		{".asc", "application/pgp-signature"},
-		{".sig", "application/pgp-signature"},
-		{".key", "application/pgp-keys"},
-		{".pub", "text/plain"},
-		{".pem", "application/x-pem-file"},
-		{".crt", "application/x-x509-ca-cert"},
-		{".cer", "application/x-x509-ca-cert"},
-		{".der", "application/x-x509-ca-cert"},
-		{".p7b", "application/x-pkcs7-certificates"},
-		{".p12", "application/x-pkcs12"},
-		{".pfx", "application/x-pkcs12"},
-		{".jks", "application/x-java-keystore"},
-		{".keystore", "application/x-java-keystore"},
-		{".csr", "application/pkcs10"},
-		{".acme", "text/plain"},
-		{".htaccess", "text/plain"},
-		{".htpasswd", "text/plain"},
-		{".htgroups", "text/plain"},
-		{".robots.txt", "text/plain"},
-		{".sitemap.xml", "application/xml"},
-		{".manifest", "text/cache-manifest"},
-		{".webmanifest", "application/manifest+json"},
-		{".appcache", "text/cache-manifest"},
-		{".mo", "application/x-gettext"},
-		{".po", "application/x-gettext"},
-		{".pot", "application/x-gettext"},
-		{".ts", "application/typescript"},
-		{".po", "text/x-po"},
-		{".pot", "text/x-pot"},
-		{".resx", "application/x-resx"},
-		{".strings", "text/plain"},
-		{".properties", "text/x-properties"},
-		{".gradle", "text/x-gradle"},
-		{".bazel", "text/plain"},
-		{".buck", "text/plain"},
-		{".bazelrc", "text/plain"},
-		{".clangformat", "text/plain"},
-		{".clang-format", "text/plain"},
-		{".prettierrc", "application/json"},
-		{".prettierignore", "text/plain"},
-		{".eslintrc", "application/json"},
-		{".eslintignore", "text/plain"},
-		{".stylelintrc", "application/json"},
-		{".stylelintignore", "text/plain"},
-		{".babelrc", "application/json"},
-		{".babelrc.js", "text/javascript"},
-		{".eslintrc.json", "application/json"},
-		{".eslintrc.yml", "text/yaml"},
-		{".eslintrc.yaml", "text/yaml"},
-		{".eslintrc.js", "text/javascript"},
-		{".browserslistrc", "text/plain"},
-		{".npmrc", "text/plain"},
-		{".yarnrc", "text/plain"},
-		{".nvmrc", "text/plain"},
-		{".node-version", "text/plain"},
-		{".ruby-version", "text/plain"},
-		{".go-version", "text/plain"},
-		{".python-version", "text/plain"},
-		{".php-version", "text/plain"},
-		{".terraform", "text/plain"},
-		{".tf", "text/plain"},
-		{".tfvars", "text/plain"},
-		{".hcl", "text/plain"},
-		{".ansible", "text/x-yaml"},
-		{".yml.j2", "text/x-jinja"},
-		{".yaml.j2", "text/x-jinja"},
-		{".graphql", "text/graphql"},
-		{".gql", "text/graphql"},
-		{".proto", "text/x-protobuf"},
-		{".thrift", "text/x-thrift"},
-		{".idl", "text/x-idl"},
-		{".wsdl", "application/xml"},
-		{".wadl", "application/xml"},
-		{".raml", "application/raml+yaml"},
-		{".openapi", "application/yaml"},
-		{".swagger", "application/yaml"},
-		{".swagger.json", "application/json"},
-		{".asyncapi", "application/yaml"},
-		{".asyncapi.json", "application/json"},
-		{".hh", "text/x-c++src"},
-		{".hpp", "text/x-c++src"},
-		{".hxx", "text/x-c++src"},
-		{".h++", "text/x-c++src"},
-		{".csx", "text/x-csharp"},
-		{".csproj", "application/xml"},
-		{".vbproj", "application/xml"},
-		{".fsx", "text/x-fsharp"},
-		{".fsproj", "application/xml"},
-		{".vb", "text/x-vbnet"},
-		{".vbs", "text/x-vbscript"},
-		{".mjs", "text/javascript"},
-		{".cjs", "text/javascript"},
-		{".tsx", "text/typescript"},
-		{".jsx", "text/jsx"},
-		{".css", "text/css"},
-		{".scss", "text/x-scss"},
-		{".sass", "text/x-sass"},
-		{".less", "text/x-less"},
-		{".styl", "text/x-stylus"},
-		{".stylus", "text/x-stylus"},
-		{".html", "text/html"},
-		{".htm", "text/html"},
-		{".xhtml", "application/xhtml+xml"},
-		{".vue", "text/x-vue"},
-		{".svelte", "text/x-svelte"},
-		{".astro", "text/x-astro"},
-		{".scala", "text/x-scala"},
-		{".t", "text/x-perl"},
-		{".vim", "text/x-vim"},
-		{".el", "text/x-elisp"},
-		{".lisp", "text/x-lisp"},
-		{".clj", "text/x-clojure"},
-		{".cljs", "text/x-clojure"},
-		{".edn", "text/x-clojure"},
-		{".ex", "text/x-elixir"},
-		{".exs", "text/x-elixir"},
-		{".erl", "text/x-erlang"},
-		{".hrl", "text/x-erlang"},
-		{".ml", "text/x-ocaml"},
-		{".mli", "text/x-ocaml"},
-		{".fs", "text/x-fsharp"},
-		{".fsi", "text/x-fsharp"},
-		{".hs", "text/x-haskell"},
-		{".lhs", "text/x-haskell"},
-		{".r", "text/x-r"},
-		{".R", "text/x-r"},
-		{".jl", "text/x-julia"},
-		{".m", "text/x-matlab"},
-		{".mm", "text/x-objc++"},
-		{".dart", "text/x-dart"},
-		{".pas", "text/x-pascal"},
-		{".pp", "text/x-pascal"},
-		{".d", "text/x-d"},
-		{".asm", "text/x-asm"},
-		{".s", "text/x-asm"},
+	var mimeTypes map[string]string
+	if err := json.Unmarshal(mimeTypesJSON, &mimeTypes); err != nil {
+		panic("failed to parse mime_types.json: " + err.Error())
 	}
-	for _, mt := range mimeTypes {
-		_ = mime.AddExtensionType(mt[0], mt[1])
+	for ext, typ := range mimeTypes {
+		_ = mime.AddExtensionType(ext, typ)
 	}
 }
 
@@ -714,6 +456,7 @@ func (s *Server) createCorsHandler() func(http.Handler) http.Handler {
 				"Authorization",
 				"X-Requested-With",
 				"X-Deletion-Token",
+				"X-Upload-Token",
 				"X-Encrypt-Password",
 				"X-Decrypt-Password",
 				"Max-Downloads",
@@ -770,7 +513,7 @@ func (s *Server) startTLSServer(h http.Handler) *http.Server {
 }
 
 func (s *Server) shutdownServers(servers []*http.Server) {
-	s.logger.Printf("Shutting down...")
+	s.logger.Print("Shutting down...")
 	s.purgeCancel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -784,7 +527,7 @@ func (s *Server) shutdownServers(servers []*http.Server) {
 	if s.logFile != nil {
 		_ = s.logFile.Close()
 	}
-	s.logger.Printf("Server stopped.")
+	s.logger.Print("Server stopped.")
 }
 
 func (s *Server) Run() {
@@ -836,7 +579,7 @@ func (s *Server) Run() {
 		servers = append(servers, tlsSrv)
 	}
 
-	s.logger.Printf("---------------------------")
+	s.logger.Print("---------------------------")
 
 	s.purgeCtx, s.purgeCancel = context.WithCancel(context.Background())
 	if s.purgeDays > 0 {
@@ -850,7 +593,7 @@ func (s *Server) Run() {
 	if listening {
 		<-term
 	} else {
-		s.logger.Printf("No listener active.")
+		s.logger.Print("No listener active.")
 	}
 
 	s.shutdownServers(servers)
@@ -925,6 +668,11 @@ func (s *Server) setupRoutes(r *mux.Router, staticHandler http.Handler) {
 	r.HandleFunc("/{action:(?:download|get|inline)}/{token}/{filename}", s.headHandler).Methods("HEAD")
 	r.HandleFunc("/{token}/{filename}", s.previewHandler).MatcherFunc(s.previewMatcher).Methods("GET")
 
+	r.HandleFunc("/{token}/.zip", s.dirZipHandler).Methods("GET")
+	r.HandleFunc("/{token}/.tar.gz", s.dirTarGzHandler).Methods("GET")
+	r.HandleFunc("/{token}/", s.dirHandler).Methods("GET")
+	r.HandleFunc("/{token}", s.dirHandler).Methods("GET")
+
 	getHandlerFn := s.getHandler
 	if s.rateLimitRequests > 0 {
 		realIPKeyFn := func(r *http.Request) string {
@@ -939,10 +687,13 @@ func (s *Server) setupRoutes(r *mux.Router, staticHandler http.Handler) {
 	r.HandleFunc("/{filename}/scan", s.scanHandler).Methods("PUT")
 	r.HandleFunc("/put/{filename}", s.basicAuthHandler(http.HandlerFunc(s.putHandler))).Methods("PUT")
 	r.HandleFunc("/upload/{filename}", s.basicAuthHandler(http.HandlerFunc(s.putHandler))).Methods("PUT")
+	r.HandleFunc("/{token}/{filename}", s.basicAuthHandler(http.HandlerFunc(s.putToDirHandler))).Methods("PUT")
 	r.HandleFunc("/{filename}", s.basicAuthHandler(http.HandlerFunc(s.putHandler))).Methods("PUT")
+	r.HandleFunc("/dir", s.basicAuthHandler(http.HandlerFunc(s.createDirHandler))).Methods("POST")
 	r.HandleFunc("/", s.basicAuthHandler(http.HandlerFunc(s.postHandler))).Methods("POST")
 	r.HandleFunc("/{token}/{filename}/{deletionToken}", s.deleteHandler).Methods("DELETE")
 	r.HandleFunc("/{token}/{filename}", s.deleteHandler).Methods("DELETE")
+	r.HandleFunc("/{token}/", s.deleteDirHandler).Methods("DELETE")
 	r.NotFoundHandler = http.HandlerFunc(s.notFoundHandler)
 }
 

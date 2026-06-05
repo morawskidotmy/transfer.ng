@@ -5,613 +5,295 @@ IP filter and HTTP auth bypass via unauthenticated X-Forwarded-For header spoofi
 
 # transfer.sh [![Go Report Card](https://goreportcard.com/badge/github.com/dutchcoders/transfer.sh)](https://goreportcard.com/report/github.com/dutchcoders/transfer.sh) [![Docker pulls](https://img.shields.io/docker/pulls/dutchcoders/transfer.sh.svg)](https://hub.docker.com/r/dutchcoders/transfer.sh/) [![Build Status](https://github.com/dutchcoders/transfer.sh/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/dutchcoders/transfer.sh/actions/workflows/test.yml?query=branch%3Amain)
 
-Easy and fast file sharing from the command-line. This code contains the server with everything you need to create your own instance.
+[![Go Report Card](https://goreportcard.com/badge/github.com/morawskidotmy/transfer.ng)](https://goreportcard.com/report/github.com/morawskidotmy/transfer.ng)
+[![Build Status](https://github.com/morawskidotmy/transfer.ng/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/morawskidotmy/transfer.ng/actions/workflows/test.yml?query=branch%3Amain)
 
-transfer.ng supports the s3 (Amazon S3), gdrive (Google Drive), storj (Storj) providers, and local file system (local).
+Easy and fast file sharing from the command-line. Self-hostable with support for S3, Google Drive, Storj, and local storage.
 
-<br />
+> [!IMPORTANT]
+> **transfer.ng vs transfer.sh: Directory Support**
+>
+> Unlike the original transfer.sh, transfer.ng includes **gofile-style directories**. Every upload automatically gets its own directory, and you can group multiple files together, add files from different machines, list directory contents, and download entire directories as archives.
+>
+> See the [Directories](#directories) section for details.
 
----
+## Features
 
-<br />
+- Upload and download files via curl, wget, or any HTTP client
+- **Directory support** - group files, add from multiple machines, download as archive
+- Server-side encryption (AES-256)
+- Automatic compression for large files
+- Virus scanning with ClamAV
+- Rate limiting and IP filtering
+- Multiple storage backends: S3, Google Drive, Storj, local filesystem
+- QR codes for mobile transfers
+- File preview for images, video, audio, and text
 
-## Usage
+> [!TIP]
+> **Missing a MIME type?** PRs adding new file extension mappings to [`server/mime_types.json`](server/mime_types.json) are always welcome.
 
-This section outlines how to use transfer.ng
-
-<br />
-
-### Upload
-
-```bash
-$ curl -v --upload-file ./hello.txt https://transferng.example.com/hello.txt
-```
-
-<br />
-
-### Encrypt & Upload
-
-```bash
-$ gpg --armor --symmetric --output - /tmp/hello.txt | curl --upload-file - https://transferng.example.com/test.txt
-```
-
-<br />
-
-### Download & Decrypt
+## Quick Start
 
 ```bash
-$ curl https://transferng.example.com/1lDau/test.txt | gpg --decrypt --output /tmp/hello.txt
+# Upload a file
+curl --upload-file ./hello.txt https://transferng.example.com/hello.txt
+
+# Download a file
+curl https://transferng.example.com/TOKEN/hello.txt -o hello.txt
+
+# Delete a file
+curl -X DELETE https://transferng.example.com/TOKEN/hello.txt/DELETION_TOKEN
 ```
 
-<br />
+## Directories
 
-### Upload to Virustotal
+Every upload in transfer.ng lives inside a **directory** identified by a token. Even a single file gets its own directory. This allows you to:
+
+- Group multiple files together
+- Add files from different machines to the same directory
+- List all files in a directory
+- Download all files as a zip or tar.gz archive
+- Delete an entire directory at once
+
+Each upload returns two headers:
+
+| Header | Description |
+|--------|-------------|
+| `X-Url-Directory` | Listing URL of the directory |
+| `X-Upload-Token` | Write-secret to add more files to the directory |
+
+### Create a directory
 
 ```bash
-$ curl -X PUT --upload-file nhgbhhj https://transferng.example.com/test.txt/virustotal
+curl -X POST https://transferng.example.com/dir
+# Returns:
+# Directory: https://transferng.example.com/abcd1234/
+# Upload-Token: s3cretUploadToken
 ```
 
-<br />
-
-### Deleting
+### Add files to a directory
 
 ```bash
-$ curl -X DELETE <X-Url-Delete Response Header URL>
+curl --upload-file ./report.pdf \
+    https://transferng.example.com/abcd1234/report.pdf \
+    -H "X-Upload-Token: s3cretUploadToken"
 ```
 
-<br />
+### Upload a whole folder
 
----
+```bash
+find ./myfolder -type f -exec \
+    curl -H "X-Upload-Token: s3cretUploadToken" \
+    --upload-file {} https://transferng.example.com/abcd1234/ \;
+```
 
-<br />
+### List a directory
 
-## HTTP Headers Reference
+```bash
+curl https://transferng.example.com/abcd1234/
+# Returns list of file URLs
+```
+
+### Download as archive
+
+```bash
+curl -O https://transferng.example.com/abcd1234/.zip
+curl -O https://transferng.example.com/abcd1234/.tar.gz
+```
+
+### Delete a directory
+
+```bash
+curl -X DELETE https://transferng.example.com/abcd1234/ \
+    -H "X-Upload-Token: s3cretUploadToken"
+```
+
+## Upload Options
+
+```bash
+# Limit downloads
+curl --upload-file ./file.txt https://transferng.example.com/file.txt \
+    -H "Max-Downloads: 5"
+
+# Set expiration
+curl --upload-file ./file.txt https://transferng.example.com/file.txt \
+    -H "Max-Days: 7"
+
+# Encrypt on upload
+curl --upload-file ./file.txt https://transferng.example.com/file.txt \
+    -H "X-Encrypt-Password: mysecret"
+
+# Decrypt on download
+curl https://transferng.example.com/TOKEN/file.txt \
+    -H "X-Decrypt-Password: mysecret"
+```
+
+## HTTP Headers
 
 ### Request Headers
 
-| Header | Description | Example |
-|--------|-------------|---------|
-| `Max-Downloads` | limit number of times file can be downloaded | `Max-Downloads: 5` |
-| `Max-Days` | number of days before file expires | `Max-Days: 7` |
-| `X-Encrypt-Password` | encrypt file server-side with aes256 | `X-Encrypt-Password: mysecret` |
-| `X-Decrypt-Password` | decrypt file server-side when downloading | `X-Decrypt-Password: mysecret` |
-| `X-Deletion-Token` | deletion token for deleting files (alternative to url path) | `X-Deletion-Token: abc123xyz` |
-| `Range` | request partial content (byte range) | `Range: bytes=0-1023` |
+| Header | Description |
+|--------|-------------|
+| `Max-Downloads` | Limit number of downloads |
+| `Max-Days` | Days until file expires |
+| `X-Encrypt-Password` | Encrypt file server-side (AES-256) |
+| `X-Decrypt-Password` | Decrypt file on download |
+| `X-Deletion-Token` | Token for deleting the file |
+| `X-Upload-Token` | Directory write-secret |
+| `Range` | Request partial content (bytes) |
 
 ### Response Headers
 
 | Header | Description |
 |--------|-------------|
-| `X-Url-Delete` | full url to delete the uploaded file |
-| `X-Remaining-Downloads` | downloads remaining before expiry (or "n/a") |
-| `X-Remaining-Days` | days remaining before expiry (or "n/a") |
-| `Content-Disposition` | attachment or inline with filename |
-| `Content-Type` | mime type of the file |
-| `Content-Length` | size in bytes |
-| `Content-Range` | byte range info for partial content |
-| `Accept-Ranges` | indicates bytes range support |
+| `X-Url-Delete` | URL to delete the file |
+| `X-Url-Directory` | Directory listing URL |
+| `X-Upload-Token` | Directory write-secret |
+| `X-Remaining-Downloads` | Downloads remaining |
+| `X-Remaining-Days` | Days remaining |
 
-<br />
+## Configuration
 
-### Header Examples
-
-#### Limit Downloads
+Run with local storage:
 
 ```bash
-$ curl --upload-file ./hello.txt https://transferng.example.com/hello.txt -H "Max-Downloads: 1"
+transfer.ng --provider=local --listener :8080 --basedir /data/
 ```
 
-#### Set Expiration
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `LISTENER` | HTTP listener address (default: `:80`) |
+| `TLS_LISTENER` | HTTPS listener address |
+| `TLS_LISTENER_ONLY` | Only listen on TLS |
+| `TLS_CERT_FILE` | Path to TLS certificate |
+| `TLS_PRIVATE_KEY` | Path to TLS private key |
+| `FORCE_HTTPS` | Redirect HTTP to HTTPS |
+| `BASEDIR` | Base directory for local/gdrive storage |
+| `TEMP_PATH` | Temporary file directory |
+| `MAX_UPLOAD_SIZE` | Max upload size in KB |
+| `PURGE_DAYS` | Auto-purge files after N days |
+| `PURGE_INTERVAL` | Purge check interval in hours |
+| `RATE_LIMIT` | Requests per minute per IP |
+| `COMPRESS_LARGE` | Compress files larger than this (e.g., `10m`) |
+| `RANDOM_TOKEN_LENGTH` | Length of random tokens (default: 6) |
+| `CORS_DOMAINS` | Comma-separated CORS allowed domains |
+| `HTTP_AUTH_USER` | Basic auth username |
+| `HTTP_AUTH_PASS` | Basic auth password |
+| `HTTP_AUTH_HTPASSWD` | Path to htpasswd file |
+
+### Storage Providers
+
+#### S3
 
 ```bash
-$ curl --upload-file ./hello.txt https://transferng.example.com/hello.txt -H "Max-Days: 7"
+transfer.ng --provider=s3 \
+    --aws-access-key KEY \
+    --aws-secret-key SECRET \
+    --bucket mybucket \
+    --s3-region eu-west-1
 ```
 
-#### Encrypt on Upload
+For custom S3-compatible endpoints (MinIO, etc.), add `--s3-endpoint` and `--s3-path-style`.
 
-> **Warning**: use this feature only on your self-hosted server
+#### Storj
 
 ```bash
-$ curl --upload-file ./hello.txt https://transferng.example.com/hello.txt -H "X-Encrypt-Password: mysecret"
+transfer.ng --provider=storj \
+    --storj-access ACCESS_GRANT \
+    --storj-bucket mybucket
 ```
 
-#### Decrypt on Download
+#### Google Drive
 
 ```bash
-$ curl https://transferng.example.com/abc123/hello.txt -H "X-Decrypt-Password: mysecret"
+transfer.ng --provider=gdrive \
+    --gdrive-client-json-filepath /path/to/client.json \
+    --gdrive-local-config-path /path/to/config \
+    --basedir /path/to/data
 ```
-
-#### Delete with Header Token
-
-```bash
-$ curl -X DELETE https://transferng.example.com/abc123/hello.txt -H "X-Deletion-Token: xyz789"
-```
-
-#### Get X-Url-Delete
-
-```bash
-$ curl -sD - --upload-file ./hello.txt https://transferng.example.com/hello.txt | grep -i x-url-delete
-```
-
-<br />
-
----
-
-<br />
-
-## Examples
-
-See good usage examples on [examples.md](examples.md)
-
-<br />
-
-## Link aliases
-
-Create direct download link:
-
-https://transferng.example.com/1lDau/test.txt --> https://transferng.example.com/get/1lDau/test.txt
-
-Inline file:
-
-https://transferng.example.com/1lDau/test.txt --> https://transferng.example.com/inline/1lDau/test.txt
-
-<br />
-
----
-
-<br />
-
-## Usage
-
-Parameter | Description                                                                             | Value                         | Env                         
---- |-----------------------------------------------------------------------------------------------|-------------------------------|-------------------------------|
-listener | port to use for http (:80)                                                               |                               | LISTENER                      |
-profile-listener | port to use for profiler (:6060)                                                 |                               | PROFILE_LISTENER              |
-force-https | redirect to https                                                                     | false                         | FORCE_HTTPS                   |
-tls-listener | port to use for https (:443)                                                         |                               | TLS_LISTENER                  |
-tls-listener-only | flag to enable tls listener only                                                |                               | TLS_LISTENER_ONLY             |
-tls-cert-file | path to tls certificate                                                             |                               | TLS_CERT_FILE                 |
-tls-private-key | path to tls private key                                                           |                               | TLS_PRIVATE_KEY               |
-http-auth-user | user for basic http auth on upload                                                 |                               | HTTP_AUTH_USER                |
-http-auth-pass | pass for basic http auth on upload                                                 |                               | HTTP_AUTH_PASS                |
-http-auth-htpasswd | htpasswd file path for basic http auth on upload                               |                               | HTTP_AUTH_HTPASSWD            |
-http-auth-ip-whitelist | comma separated list of allowed ips to upload without auth challenge       |                               | HTTP_AUTH_IP_WHITELIST        |
-virustotal-key | VirusTotal API key                                                                 |                               | VIRUSTOTAL_KEY                |
-ip-whitelist | comma separated list of ips allowed to connect to the service                        |                               | IP_WHITELIST                  |
-ip-blacklist | comma separated list of ips not allowed to connect to the service                    |                               | IP_BLACKLIST                  |
-temp-path | path to temp folder                                                                     | system temp                   | TEMP_PATH                     |
-web-path | path to static web files (for development or custom front end)                           |                               | WEB_PATH                      |
-proxy-path | path prefix when service is run behind a proxy (a `/` prefix will be trimmed)          |                               | PROXY_PATH                    |
-proxy-port | port of the proxy when the service is run behind a proxy                               |                               | PROXY_PORT                    |
-email-contact | email contact for the front end                                                     |                               | EMAIL_CONTACT                 |
-ga-key | google analytics key for the front end                                                     |                               | GA_KEY                        |
-provider | which storage provider to use                                                            | (s3, storj, gdrive or local)  |                               |
-uservoice-key | user voice key for the front end                                                    |                               | USERVOICE_KEY                 |
-aws-access-key | aws access key                                                                     |                               | AWS_ACCESS_KEY                |
-aws-secret-key | aws access key                                                                     |                               | AWS_SECRET_KEY                |
-bucket | aws bucket                                                                                 |                               | BUCKET                        |
-s3-endpoint | Custom S3 endpoint.                                                                   |                               | S3_ENDPOINT                   |
-s3-region | region of the s3 bucket                                                                 | eu-west-1                     | S3_REGION                     |
-s3-no-multipart | disables s3 multipart upload                                                      | false                         | S3_NO_MULTIPART               |
-s3-path-style | Forces path style URLs, required for Minio.                                         | false                         | S3_PATH_STYLE                 |
-storj-access | Access for the project                                                               |                               | STORJ_ACCESS                  |
-storj-bucket | Bucket to use within the project                                                     |                               | STORJ_BUCKET                  |
-basedir | path storage for local/gdrive provider                                                    |                               | BASEDIR                       |
-gdrive-client-json-filepath | path to oauth client json config for gdrive provider                  |                               | GDRIVE_CLIENT_JSON_FILEPATH   |
-gdrive-local-config-path | path to store local transfer.sh config cache for gdrive provider         |                               | GDRIVE_LOCAL_CONFIG_PATH      |
-gdrive-chunk-size | chunk size for gdrive upload in megabytes, must be lower than available memory (8 MB) |                         | GDRIVE_CHUNK_SIZE             |
-lets-encrypt-hosts | hosts to use for lets encrypt certificates (comma separated)                   |                               | HOSTS                         |
-log | path to log file                                                                              |                               | LOG                           |
-cors-domains | comma separated list of domains for CORS, setting it enable CORS                     |                               | CORS_DOMAINS                  |
-insecure | **(added for next gen)** disable IP filtering and CORS checks (security managed by reverse proxy) | false                         | INSECURE                      |
-clamav-host | host for clamav feature                                                               |                               | CLAMAV_HOST                   |
-perform-clamav-prescan | prescan every upload using clamav (clamav-host must be local clamd unix socket)    |                       | PERFORM_CLAMAV_PRESCAN        |
-rate-limit | request per minute                                                                     |                               | RATE_LIMIT                    |
-max-upload-size | max upload size in kilobytes                                                      |                               | MAX_UPLOAD_SIZE               |
-purge-days | number of days after the uploads are purged automatically                              |                               | PURGE_DAYS                    |   
-purge-interval | interval (hours) to run automatic purge for (excluding S3 and Storj)               |                               | PURGE_INTERVAL                |   
-random-token-length | length of random token for upload path (double the size for delete path)      | 6                             | RANDOM_TOKEN_LENGTH           |   
-compress-large | **(added for next gen)** compress files larger than specified size using zstd (e.g. 10m, 1g) | 10m                           | COMPRESS_LARGE                |   
-max-archive-files | **(added for next gen)** max files allowed in archive downloads (zip/tar) | 100                           | MAX_ARCHIVE_FILES             |   
-
-If you want to use TLS using lets encrypt certificates, set lets-encrypt-hosts to your domain, set tls-listener to :443 and enable force-https.
-
-If you want to use TLS using your own certificates, set tls-listener to :443, force-https, tls-cert-file and tls-private-key.
-
-<br />
 
 ## Compression
 
-Files larger than the specified `compress-large` threshold are automatically compressed with zstd on upload and decompressed on download. This is seamless to users - they upload and download files normally, but storage usage is reduced.
-
-Supported size formats: `10m`, `100mb`, `1g`, `2.5g`, `512kb`, etc.
-
-### Examples
+Files larger than `--compress-large` are automatically compressed with zstd on upload and decompressed on download. This is transparent to users.
 
 ```bash
 transfer.ng --provider=local --compress-large=10m
 ```
 
-```bash
-transfer.ng --provider=s3 --compress-large=50m
-```
-
-Disable compression entirely:
-
-```bash
-transfer.ng --provider=local --compress-large=0
-```
-
-Or set via environment variable:
-
-```bash
-COMPRESS_LARGE=100m transfer.ng --provider=local
-```
-
-<br />
-
----
-
-<br />
-
 ## Development
-
-Switched to GO111MODULE
 
 ```bash
 go run main.go --provider=local --listener :8080 --temp-path=/tmp/ --basedir=/tmp/
 ```
 
-<br />
-
----
-
-<br />
-
 ## Build
 
 ```bash
-$ git clone git@github.com:morawskidotmy/transfer.ng.git
-$ cd transfer.ng
-$ go build -o transfersh main.go
+git clone https://github.com/morawskidotmy/transfer.ng.git
+cd transfer.ng
+go build -o transfer.ng main.go
 ```
-
-<br />
-
----
-
-<br />
 
 ## Docker
 
-Build and run transfer.ng in a Docker container:
-
 ```bash
+# Build
 docker build -t transfer.ng:latest .
+
+# Run with local storage
+docker run -p 8080:8080 transfer.ng:latest --provider local --basedir /data/
+
+# Run with custom UID/GID
+docker build -t transfer.ng:noroot \
+    --build-arg RUNAS=transferng \
+    --build-arg PUID=1000 \
+    --build-arg PGID=1000 .
+docker run -p 8080:8080 transfer.ng:noroot --provider local --basedir /data/
 ```
 
-Run with local storage:
-
-```bash
-docker run --publish 8080:8080 transfer.ng:latest --provider local --basedir /tmp/
-```
-
-Or with custom UID/GID (recommended for security):
-
-```bash
-docker build -t transfer.ng:noroot --build-arg RUNAS=transferng --build-arg PUID=1000 --build-arg PGID=1000 .
-docker run --publish 8080:8080 transfer.ng:noroot --provider local --basedir /tmp/
-```
-
-<br />
-
-### Using Docker Compose
-
-A `docker-compose.yml` is included for easy deployment:
+Or use Docker Compose:
 
 ```bash
 docker-compose up -d
 ```
 
-This starts transfer.ng with local storage and persistent volumes.
+## Shell Functions
 
-<br />
+### Bash/Zsh
 
----
-
-<br />
-
-## S3 Usage
-
-For the usage with a AWS S3 Bucket, you just need to specify the following options:
-- provider `--provider s3`
-- aws-access-key _(either via flag or environment variable `AWS_ACCESS_KEY`)_
-- aws-secret-key _(either via flag or environment variable `AWS_SECRET_KEY`)_
-- bucket _(either via flag or environment variable `BUCKET`)_
-- s3-region _(either via flag or environment variable `S3_REGION`)_
-
-If you specify the s3-region, you don't need to set the endpoint URL since the correct endpoint will used automatically.
-
-<br />
-
-### Custom S3 providers
-
-To use a custom non-AWS S3 provider, you need to specify the endpoint as defined from your cloud provider.
-
-<br />
-
----
-
-<br />
-
-## Storj Network Provider
-
-To use the Storj Network as a storage provider you need to specify the following flags:
-- provider `--provider storj`
-- storj-access _(either via flag or environment variable STORJ_ACCESS)_
-- storj-bucket _(either via flag or environment variable STORJ_BUCKET)_
-
-<br />
-
-### Creating Bucket and Scope
-
-You need to create an access grant (or copy it from the uplink configuration) and a bucket in preparation.
-
-To get started, log in to your account and go to the Access Grant Menu and start the Wizard on the upper right.
-
-Enter your access grant name of choice, hit *Next* and restrict it as necessary/preferred.
-Afterwards continue either in CLI or within the Browser. Next, you'll be asked for a Passphrase used as Encryption Key.
-**Make sure to save it in a safe place. Without it, you will lose the ability to decrypt your files!**
-
-Afterwards, you can copy the access grant and then start the startup of the transfer.sh endpoint. 
-It is recommended to provide both the access grant and the bucket name as ENV Variables for enhanced security.
-
-Example:
-
-```
-export STORJ_BUCKET=<BUCKET NAME>
-export STORJ_ACCESS=<ACCESS GRANT>
-transfer.ng --provider storj
-```
-
-<br />
-
----
-
-<br />
-
-## Google Drive Usage
-
-For the usage with Google drive, you need to specify the following options:
-- provider
-- gdrive-client-json-filepath
-- gdrive-local-config-path
-- basedir
-
-<br />
-
-### Creating Gdrive Client Json
-
-You need to create an OAuth Client id from console.cloud.google.com, download the file, and place it into a safe directory.
-
-<br />
-
-### Usage example
-
-```go run main.go --provider gdrive --basedir /tmp/ --gdrive-client-json-filepath /[credential_dir] --gdrive-local-config-path [directory_to_save_config] ```
-
-<br />
-
----
-
-<br />
-
-## Shell functions
-
-### Bash, ash and zsh (multiple files uploaded as zip archive)
-##### Add this to .bashrc or .zshrc or its equivalent
-```bash
-transfer() (if [ $# -eq 0 ]; then printf "No arguments specified.\nUsage:\n transfer <file|directory>\n ... | transfer <file_name>\n">&2; return 1; fi; file_name=$(basename "$1"); if [ -t 0 ]; then file="$1"; if [ ! -e "$file" ]; then echo "$file: No such file or directory">&2; return 1; fi; if [ -d "$file" ]; then cd "$file" || return 1; file_name="$file_name.zip"; set -- zip -r -q - .; else set -- cat "$file"; fi; else set -- cat; fi; url=$("$@" | curl --silent --show-error --progress-bar --upload-file "-" "https://transferng.example.com/$file_name"); echo "$url"; )
-```
-
-<br />
-
-#### Now you can use transfer function
-```
-$ transfer hello.txt
-```
-
-<br />
-
-### Bash and zsh (with delete url, delete token output and prompt before uploading)
-##### Add this to .bashrc or .zshrc or its equivalent
-
-<details><summary>Expand</summary><p>
+Add to your `.bashrc` or `.zshrc`:
 
 ```bash
-transfer()
-{
-    local file
-    declare -a file_array
-    file_array=("${@}")
-
-    if [[ "${file_array[@]}" == "" || "${1}" == "--help" || "${1}" == "-h" ]]
-    then
-        echo "${0} - Upload arbitrary files to \"transfer.sh\"."
-        echo ""
-        echo "Usage: ${0} [options] [<file>]..."
-        echo ""
-        echo "OPTIONS:"
-        echo "  -h, --help"
-        echo "      show this message"
-        echo ""
-        echo "EXAMPLES:"
-        echo "  Upload a single file from the current working directory:"
-        echo "      ${0} \"image.img\""
-        echo ""
-        echo "  Upload multiple files from the current working directory:"
-        echo "      ${0} \"image.img\" \"image2.img\""
-        echo ""
-        echo "  Upload a file from a different directory:"
-        echo "      ${0} \"/tmp/some_file\""
-        echo ""
-        echo "  Upload all files from the current working directory. Be aware of the webserver's rate limiting!:"
-        echo "      ${0} *"
-        echo ""
-        echo "  Upload a single file from the current working directory and filter out the delete token and download link:"
-        echo "      ${0} \"image.img\" | awk --field-separator=\": \" '/Delete token:/ { print \$2 } /Download link:/ { print \$2 }'"
-        echo ""
-        echo "  Show help text from \"transfer.sh\":"
-        echo "      curl --request GET \"https://transferng.example.com\""
-        return 0
+transfer() {
+    if [ $# -eq 0 ]; then
+        echo "Usage: transfer <file|directory>"
+        return 1
+    fi
+    local file_name=$(basename "$1")
+    if [ -d "$1" ]; then
+        (cd "$1" && zip -r -q - .) | curl --silent --show-error \
+            --upload-file "-" "https://transferng.example.com/${file_name}.zip"
     else
-        for file in "${file_array[@]}"
-        do
-            if [[ ! -f "${file}" ]]
-            then
-                echo -e "\e[01;31m'${file}' could not be found or is not a file.\e[0m" >&2
-                return 1
-            fi
-        done
-        unset file
+        curl --silent --show-error --upload-file "$1" \
+            "https://transferng.example.com/${file_name}"
     fi
-
-    local upload_files
-    local curl_output
-    local awk_output
-
-    du -c -k -L "${file_array[@]}" >&2
-    # be compatible with "bash"
-    if [[ "${ZSH_NAME}" == "zsh" ]]
-    then
-        read $'upload_files?\e[01;31mDo you really want to upload the above files ('"${#file_array[@]}"$') to "transfer.sh"? (Y/n): \e[0m'
-    elif [[ "${BASH}" == *"bash"* ]]
-    then
-        read -p $'\e[01;31mDo you really want to upload the above files ('"${#file_array[@]}"$') to "transfer.sh"? (Y/n): \e[0m' upload_files
-    fi
-
-    case "${upload_files:-y}" in
-        "y"|"Y")
-            # for the sake of the progress bar, execute "curl" for each file.
-            # the parameters "--include" and "--form" will suppress the progress bar.
-            for file in "${file_array[@]}"
-            do
-                # show delete link and filter out the delete token from the response header after upload.
-                # it is important to save "curl's" "stdout" via a subshell to a variable or redirect it to another command,
-                # which just redirects to "stdout" in order to have a sane output afterwards.
-                # the progress bar is redirected to "stderr" and is only displayed,
-                # if "stdout" is redirected to something; e.g. ">/dev/null", "tee /dev/null" or "| <some_command>".
-                # the response header is redirected to "stdout", so redirecting "stdout" to "/dev/null" does not make any sense.
-                # redirecting "curl's" "stderr" to "stdout" ("2>&1") will suppress the progress bar.
-                curl_output=$(curl --request PUT --progress-bar --dump-header - --upload-file "${file}" "https://transferng.example.com/")
-                awk_output=$(awk \
-                    'gsub("\r", "", $0) && tolower($1) ~ /x-url-delete/ \
-                    {
-                        delete_link=$2;
-                        print "Delete command: curl --request DELETE " "\""delete_link"\"";
-
-                        gsub(".*/", "", delete_link);
-                        delete_token=delete_link;
-                        print "Delete token: " delete_token;
-                    }
-
-                    END{
-                        print "Download link: " $0;
-                    }' <<< "${curl_output}")
-
-                # return the results via "stdout", "awk" does not do this for some reason.
-                echo -e "${awk_output}\n"
-
-                # avoid rate limiting as much as possible; nginx: too many requests.
-                if (( ${#file_array[@]} > 4 ))
-                then
-                    sleep 5
-                fi
-            done
-            ;;
-
-        "n"|"N")
-            return 1
-            ;;
-
-        *)
-            echo -e "\e[01;31mWrong input: '${upload_files}'.\e[0m" >&2
-            return 1
-    esac
 }
 ```
 
-</p></details>
+Usage:
 
-#### Sample output
 ```bash
-$ ls -lh
-total 20M
--rw-r--r-- 1 <some_username> <some_username> 10M Apr  4 21:08 image.img
--rw-r--r-- 1 <some_username> <some_username> 10M Apr  4 21:08 image2.img
-$ transfer image*
-10240K  image2.img
-10240K  image.img
-20480K  total
-Do you really want to upload the above files (2) to "transfer.sh"? (Y/n):
-######################################################################################################################################################################################################################################## 100.0%
-Delete command: curl --request DELETE "https://transferng.example.com/wJw9pz/image2.img/mSctGx7pYCId"
-Delete token: mSctGx7pYCId
-Download link: https://transferng.example.com/wJw9pz/image2.img
-
-######################################################################################################################################################################################################################################## 100.0%
-Delete command: curl --request DELETE "https://transferng.example.com/ljJc5I/image.img/nw7qaoiKUwCU"
-Delete token: nw7qaoiKUwCU
-Download link: https://transferng.example.com/ljJc5I/image.img
-
-$ transfer "image.img" | awk --field-separator=": " '/Delete token:/ { print $2 } /Download link:/ { print $2 }'
-10240K  image.img
-10240K  total
-Do you really want to upload the above files (1) to "transfer.sh"? (Y/n):
-######################################################################################################################################################################################################################################## 100.0%
-tauN5dE3fWJe
-https://transferng.example.com/MYkuqn/image.img
+transfer hello.txt
+transfer myfolder/
 ```
 
-<br />
+## Credits
 
----
+- **Remco Verhoef** - Original author (transfer.sh)
+- **Andrea Spacca** - Maintainer
+- **Stefan Benten** - Maintainer
+- **morawskidotmy** - transfer.ng fork with directory support
 
-<br />
-
-## Contributions
-
-Contributions are welcome.
-
-<br />
-
----
-
-<br />
-
-## Original Authors
-
-**Remco Verhoef** - <https://twitter.com/remco_verhoef>
-
-<br />
-
-## Contributors
-
-- **Andrea Spacca**
-- **Stefan Benten**
-- **morawskidotmy** (transfer.ng fork)
-
-<br />
-
----
-
-<br />
-
-## Copyright and License
-
-Code and documentation copyright 2011-2018 Remco Verhoef.
-Code and documentation copyright 2018-2020 Andrea Spacca.
-Code and documentation copyright 2020- Andrea Spacca and Stefan Benten.
-Code and documentation copyright 2024- morawskidotmy (transfer.ng fork).
-
-Code released under [the MIT license](LICENSE).
+Code released under the [MIT License](LICENSE).

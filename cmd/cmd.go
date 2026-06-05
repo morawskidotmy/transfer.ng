@@ -19,9 +19,10 @@ import (
 
 var Version = "0.0.0"
 
+var sizeRe = regexp.MustCompile(`^(\d+(?:\.\d+)?)\s*([kmgt]?b?)$`)
+
 func parseSize(s string) (int64, error) {
-	re := regexp.MustCompile(`^(\d+(?:\.\d+)?)\s*([kmgt]?b?)$`)
-	matches := re.FindStringSubmatch(strings.ToLower(strings.TrimSpace(s)))
+	matches := sizeRe.FindStringSubmatch(strings.ToLower(strings.TrimSpace(s)))
 	if matches == nil {
 		return 0, fmt.Errorf("invalid size format: %s", s)
 	}
@@ -356,6 +357,18 @@ var globalFlags = []cli.Flag{
 		Value:   100,
 		EnvVars: []string{"MAX_ARCHIVE_FILES"},
 	},
+	&cli.StringFlag{
+		Name:    "max-dir-size",
+		Usage:   "max total size of files in a directory (e.g. 1g, 500m). 0 means unlimited",
+		Value:   "0",
+		EnvVars: []string{"MAX_DIR_SIZE"},
+	},
+	&cli.IntFlag{
+		Name:    "max-dir-files",
+		Usage:   "max number of files in a directory. 0 means unlimited",
+		Value:   0,
+		EnvVars: []string{"MAX_DIR_FILES"},
+	},
 }
 
 // Cmd wraps cli.app
@@ -469,6 +482,16 @@ func addBasicOptions(c *cli.Context, options *[]server.OptionFn, logger *log.Log
 
 	if v := c.Int("max-archive-files"); v > 0 {
 		*options = append(*options, server.MaxArchiveFiles(v))
+	}
+
+	if v := c.String("max-dir-size"); v != "" && v != "0" {
+		if bytes, err := parseSize(v); err == nil {
+			*options = append(*options, server.MaxDirSize(bytes))
+		}
+	}
+
+	if v := c.Int("max-dir-files"); v > 0 {
+		*options = append(*options, server.MaxDirFiles(v))
 	}
 }
 
