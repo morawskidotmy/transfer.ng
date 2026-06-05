@@ -222,7 +222,7 @@ func (s *suiteDirectory) TestDeletionTokenRoundTrip(c *C) {
 	w = s.do(req)
 	c.Assert(w.Code, Equals, http.StatusOK)
 
-	req = httptest.NewRequest("GET", "http://example.com/download"+deletePath[:len(deletePath)-len("/hello.txt")]+"/hello.txt", nil)
+	_ = httptest.NewRequest("GET", "http://example.com/download"+deletePath[:len(deletePath)-len("/hello.txt")]+"/hello.txt", nil)
 }
 
 func (s *suiteDirectory) TestDeleteRemovesMetadata(c *C) {

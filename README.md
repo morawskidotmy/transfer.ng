@@ -45,6 +45,8 @@ curl https://transferng.example.com/TOKEN/hello.txt -o hello.txt
 curl -X DELETE https://transferng.example.com/TOKEN/hello.txt/DELETION_TOKEN
 ```
 
+> **Self-hosting?** See [host.md](host.md) for a complete guide to all CLI flags, storage backends, TLS, authentication, and deployment scenarios.
+
 ## Directories
 
 Every upload in transfer.ng lives inside a **directory** identified by a token. Even a single file gets its own directory. This allows you to:
