@@ -1,0 +1,14 @@
+{
+  "only": [
+    "go",
+    "html",
+    "yml",
+    "gitignore",
+    "jshintrc"
+  ],
+  "budgets": {},
+  "routing": {
+    "retrieval": {}
+  },
+  "drift": {}
+}
