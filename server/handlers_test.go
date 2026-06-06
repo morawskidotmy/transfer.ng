@@ -119,15 +119,15 @@ var (
 
 type suiteSanitize struct{}
 
-func (s *suiteSanitize) TestSanitizeBasic(c *C) {
+func (s *suiteSanitize) TestSanitizePathBasic(c *C) {
 	tests := []struct {
 		input    string
 		expected string
 	}{
 		{"normal.txt", "normal.txt"},
 		{"file name.txt", "file name.txt"},
-		{"../../../etc/passwd", "passwd"},
-		{"..\\..\\windows\\system32", "system32"},
+		{"../../../etc/passwd", "etc/passwd"},
+		{"..\\..\\windows\\system32", "windows/system32"},
 		{".hidden", "hidden"},
 		{"...test", "test"},
 		{"", "_"},
@@ -135,32 +135,36 @@ func (s *suiteSanitize) TestSanitizeBasic(c *C) {
 	}
 
 	for _, test := range tests {
-		result := sanitize(test.input)
+		result := sanitizePath(test.input)
 		c.Assert(result, Equals, test.expected, Commentf("input=%q", test.input))
 	}
 }
 
-func (s *suiteSanitize) TestSanitizeLongFilename(c *C) {
+func (s *suiteSanitize) TestSanitizePathLongFilename(c *C) {
 	longName := make([]byte, 300)
 	for i := range longName {
 		longName[i] = 'a'
 	}
-	result := sanitize(string(longName))
+	result := sanitizePath(string(longName))
 	c.Assert(len(result) <= 255, Equals, true)
 }
 
-func (s *suiteSanitize) TestSanitizePathTraversal(c *C) {
-	tests := []string{
-		"../file.txt",
-		"..\\file.txt",
-		"foo/../bar.txt",
-		"foo\\..\\bar.txt",
+func (s *suiteSanitize) TestSanitizePathNested(c *C) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"dir/sub/file.txt", "dir/sub/file.txt"},
+		{"../file.txt", "file.txt"},
+		{"..\\file.txt", "file.txt"},
+		{"foo/../bar.txt", "foo/bar.txt"},
+		{"foo\\..\\bar.txt", "foo/bar.txt"},
+		{"a/b/c/d/e/f/g/h/i/j/k/l", "a/b/c/d/e/f/g/h/i/j"},
 	}
 
-	for _, input := range tests {
-		result := sanitize(input)
-		c.Assert(result, Not(Equals), "", Commentf("input=%q should produce non-empty result", input))
-		c.Assert(result, Not(Matches), ".*\\.\\.", Commentf("input=%q result=%q should not contain '..'", input, result))
+	for _, test := range tests {
+		result := sanitizePath(test.input)
+		c.Assert(result, Equals, test.expected, Commentf("input=%q", test.input))
 	}
 }
 
@@ -177,8 +181,9 @@ func (s *suiteValidation) TestValidateTokenAndFilename(c *C) {
 		{string(make([]byte, 200)), "file.txt", false},
 		{string(make([]byte, 201)), "file.txt", true},
 		{"token", string(make([]byte, 255)), false},
-		{"token", string(make([]byte, 256)), true},
-		{string(make([]byte, 201)), string(make([]byte, 256)), true},
+		{"token", string(make([]byte, 1024)), false},
+		{"token", string(make([]byte, 1025)), true},
+		{string(make([]byte, 201)), string(make([]byte, 1025)), true},
 	}
 
 	for _, test := range tests {
@@ -378,7 +383,7 @@ func (s *suiteHandlers) TestSetCommonHeaders(c *C) {
 
 	w := httptest.NewRecorder()
 	srvr.setCommonHeaders(w, "file.txt", "attachment", "5", "10")
-	c.Assert(w.Header().Get("Content-Disposition"), Equals, `attachment; filename="file.txt"`)
+	c.Assert(w.Header().Get("Content-Disposition"), Equals, "attachment; filename=file.txt")
 	c.Assert(w.Header().Get("Connection"), Equals, "keep-alive")
 	c.Assert(w.Header().Get("Cache-Control"), Equals, "no-store")
 	c.Assert(w.Header().Get("X-Remaining-Downloads"), Equals, "5")

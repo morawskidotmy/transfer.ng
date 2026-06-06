@@ -21,6 +21,7 @@ type S3Storage struct {
 	Storage
 	bucket      string
 	s3          *s3.Client
+	uploader    *manager.Uploader
 	logger      *log.Logger
 	purgeDays   time.Duration
 	noMultipart bool
@@ -42,8 +43,16 @@ func NewS3Storage(ctx context.Context, accessKey, secretKey, bucketName string, 
 	})
 
 	return &S3Storage{
-		bucket:      bucketName,
-		s3:          client,
+		bucket: bucketName,
+		s3:     client,
+		uploader: manager.NewUploader(client, func(u *manager.Uploader) {
+			if !disableMultipart {
+				u.Concurrency = 20
+			} else {
+				u.Concurrency = 1
+			}
+			u.LeavePartsOnError = false
+		}),
 		logger:      logger,
 		noMultipart: disableMultipart,
 		purgeDays:   time.Duration(purgeDays*24) * time.Hour,
@@ -156,25 +165,13 @@ func (s *S3Storage) Put(ctx context.Context, token string, filename string, read
 	key := fmt.Sprintf("%s/%s", token, filename)
 
 	s.logger.Printf("Uploading file %s to S3 Bucket", filename)
-	var concurrency int
-	if !s.noMultipart {
-		concurrency = 20
-	} else {
-		concurrency = 1
-	}
-
-	// Create an uploader with the session and custom options
-	uploader := manager.NewUploader(s.s3, func(u *manager.Uploader) {
-		u.Concurrency = concurrency // default is 5
-		u.LeavePartsOnError = false
-	})
 
 	var expire *time.Time
 	if s.purgeDays.Hours() > 0 {
 		expire = aws.Time(time.Now().Add(s.purgeDays))
 	}
 
-	_, err = uploader.Upload(ctx, &s3.PutObjectInput{
+	_, err = s.uploader.Upload(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(s.bucket),
 		Key:         aws.String(key),
 		Body:        reader,
@@ -185,6 +182,7 @@ func (s *S3Storage) Put(ctx context.Context, token string, filename string, read
 	return
 }
 
+// IsRangeSupported returns true because S3 supports HTTP Range requests.
 func (s *S3Storage) IsRangeSupported() bool { return true }
 
 func getAwsConfig(ctx context.Context, accessKey, secretKey string) (aws.Config, error) {

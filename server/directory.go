@@ -307,7 +307,6 @@ func (s *Server) createDirHandler(w http.ResponseWriter, r *http.Request) {
 
 	dirURL := s.directoryURL(r, dirToken)
 	var body strings.Builder
-	body.WriteString("Directory: " + dirURL + "\n")
 	body.WriteString("Upload-Token: " + uploadToken + "\n")
 	body.WriteString("\n")
 	body.WriteString("Add files with:\n")
@@ -359,7 +358,7 @@ func (s *Server) buildDirFileEntries(ctx context.Context, r *http.Request, dirTo
 				}
 				return
 			}
-			relativeURL, _ := url.Parse(path.Join(s.proxyPath, dirToken, url.PathEscape(entry.Name)))
+			relativeURL, _ := url.Parse(path.Join(s.proxyPath, dirToken, escapePathForURL(entry.Name)))
 			results[i] = result{
 				entry: dirFileEntry{
 					Name: entry.Name,
@@ -536,7 +535,7 @@ func (s *Server) cleanupOrphanedUpload(ctx context.Context, dirToken, filename s
 func (s *Server) putToDirHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	dirToken := vars["token"]
-	filename := sanitize(vars["filename"])
+	filename := sanitizePath(vars["filename"])
 
 	if err := validateTokenAndFilename(dirToken, filename); err != nil {
 		s.respondError(w, http.StatusBadRequest, err.Error(), "")

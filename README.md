@@ -37,7 +37,7 @@ curl --upload-file ./hello.txt https://transferng.example.com/hello.txt
 curl https://transferng.example.com/TOKEN/hello.txt -o hello.txt
 
 # Delete a file
-curl -X DELETE https://transferng.example.com/TOKEN/hello.txt/DELETION_TOKEN
+curl -X DELETE "https://transferng.example.com/TOKEN/hello.txt?delete=DELETION_TOKEN"
 ```
 
 > **Self-hosting?** See [host.md](host.md) for a complete guide to all CLI flags, storage backends, TLS, authentication, and deployment scenarios.
@@ -64,9 +64,10 @@ Each upload returns two headers:
 ```bash
 curl -X POST https://transferng.example.com/dir
 # Returns:
-# Directory: https://transferng.example.com/abcd1234/
 # Upload-Token: s3cretUploadToken
 ```
+
+The directory URL is returned in the `X-Url-Directory` response header.
 
 ### Add files to a directory
 
@@ -79,10 +80,9 @@ curl --upload-file ./report.pdf \
 ### Upload a whole folder
 
 ```bash
-find ./myfolder -type f | while read -r f; do
+cd ./myfolder && find . -type f | xargs -P 8 -I {} \
     curl -H "X-Upload-Token: s3cretUploadToken" \
-        --upload-file "$f" "https://transferng.example.com/abcd1234/$(basename "$f")"
-done
+        --upload-file {} "https://transferng.example.com/abcd1234/{}"
 ```
 
 ### List a directory
@@ -99,11 +99,27 @@ curl -O https://transferng.example.com/abcd1234/.zip
 curl -O https://transferng.example.com/abcd1234/.tar.gz
 ```
 
-### Delete a directory
+### Nested paths
+
+Files can be uploaded with subdirectory structure preserved:
 
 ```bash
-curl -X DELETE https://transferng.example.com/abcd1234/ \
+curl --upload-file ./src/main.go \
+    https://transferng.example.com/abcd1234/src/main.go \
     -H "X-Upload-Token: s3cretUploadToken"
+```
+
+### Delete a file
+
+```bash
+curl -X DELETE "https://transferng.example.com/abcd1234/report.pdf?delete=DELETION_TOKEN"
+```
+
+Or using a header:
+
+```bash
+curl -X DELETE https://transferng.example.com/abcd1234/report.pdf \
+    -H "X-Deletion-Token: DELETION_TOKEN"
 ```
 
 ## Upload Options
@@ -172,8 +188,10 @@ transfer.ng --provider=local --listener :8080 --basedir /data/
 | `TEMP_PATH` | Temporary file directory |
 | `MAX_UPLOAD_SIZE` | Max upload size in KB |
 | `PURGE_DAYS` | Auto-purge files after N days |
-| `PURGE_INTERVAL` | Purge check interval in hours |
-| `RATE_LIMIT` | Requests per minute per IP |
+| `PURGE_INTERVAL` | Purge check interval in hours (defaults to 24 when `PURGE_DAYS` is set) |
+| `RATE_LIMIT` | Download requests per minute per IP |
+| `RATE_LIMIT_UPLOADS` | Upload requests per minute per IP |
+| `CLAMAV_TIMEOUT` | ClamAV scan timeout (default: 60s) |
 | `COMPRESS_LARGE` | Compress files larger than this (e.g., `10m`) |
 | `RANDOM_TOKEN_LENGTH` | Length of random tokens (default: 6) |
 | `CORS_DOMAINS` | Comma-separated CORS allowed domains |
@@ -269,9 +287,11 @@ transfer() {
         echo "Usage: transfer <file|directory> [file2 ...]"
         return 1
     fi
-    local response=$(curl --silent --show-error -X POST "https://transfer.morawski.my/dir")
-    local dir_url=$(echo "$response" | sed -n 's/^Directory: //p')
-    local upload_token=$(echo "$response" | sed -n 's/^Upload-Token: //p')
+    local tmpdir=$(mktemp -d)
+    curl --silent --show-error -D "$tmpdir/headers" -o "$tmpdir/body" -X POST "https://transfer.morawski.my/dir"
+    local dir_url=$(grep -i '^X-Url-Directory:' "$tmpdir/headers" | sed 's/^[^:]*: *//')
+    local upload_token=$(sed -n 's/^Upload-Token: //p' "$tmpdir/body")
+    rm -rf "$tmpdir"
     if [ -z "$dir_url" ] || [ -z "$upload_token" ]; then
         echo "Failed to create directory"
         return 1
@@ -279,12 +299,12 @@ transfer() {
     local arg f
     for arg in "$@"; do
         if [ -d "$arg" ]; then
-            find "$arg" -type f | while read -r f; do
+            while read -r f; do
                 curl --silent --show-error -H "X-Upload-Token: $upload_token" \
                     --upload-file "$f" "${dir_url}$(basename "$f")" >/dev/null \
-                    && echo "Uploaded: $(basename "$f")"
-            done
-            echo "Folder: $dir_url"
+                    && echo "Uploaded: $(basename "$f")" &
+            done < <(find "$arg" -type f)
+            wait
         else
             curl --silent --show-error -H "X-Upload-Token: $upload_token" \
                 --upload-file "$arg" "${dir_url}$(basename "$arg")" >/dev/null \
@@ -305,7 +325,6 @@ transfer hello.txt
 transfer myfolder/
 # Uploaded: file1.txt
 # Uploaded: file2.txt
-# Folder: https://transfer.morawski.my/efgh5678/
 # Directory: https://transfer.morawski.my/efgh5678/
 
 transfer file1.txt file2.txt file3.txt

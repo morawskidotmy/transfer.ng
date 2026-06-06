@@ -3,30 +3,22 @@ package web
 import (
 	"embed"
 	"io/fs"
-	"os"
 )
 
+// FS contains the embedded web assets (HTML templates, CSS, JS).
+//
 //go:embed *.html *.txt
 var FS embed.FS
 
+// Prefix is the URL path prefix for embedded web assets.
 const Prefix = "web"
 
+// Asset reads and returns the content of the named embedded file.
 func Asset(name string) ([]byte, error) {
 	return fs.ReadFile(FS, name)
 }
 
-func AssetDir(name string) ([]string, error) {
-	entries, err := fs.ReadDir(FS, name)
-	if err != nil {
-		return nil, err
-	}
-	var names []string
-	for _, e := range entries {
-		names = append(names, e.Name())
-	}
-	return names, nil
-}
-
+// AssetNames returns the sorted list of all embedded file paths.
 func AssetNames() []string {
 	var names []string
 	_ = fs.WalkDir(FS, ".", func(path string, d fs.DirEntry, err error) error {
@@ -39,8 +31,4 @@ func AssetNames() []string {
 		return nil
 	})
 	return names
-}
-
-func AssetInfo(name string) (os.FileInfo, error) {
-	return fs.Stat(FS, name)
 }

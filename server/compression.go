@@ -1,18 +1,19 @@
 package server
 
 import (
-	"bytes"
 	"io"
 
 	"github.com/klauspost/compress/zstd"
 )
 
+// CompressionReader wraps an io.ReadCloser and optionally decompresses zstd data on read.
 type CompressionReader struct {
 	reader       io.ReadCloser
 	decompressor *zstd.Decoder
 	isCompressed bool
 }
 
+// NewCompressionReader creates a reader that decompresses zstd data when isCompressed is true.
 func NewCompressionReader(reader io.ReadCloser, isCompressed bool) (*CompressionReader, error) {
 	cr := &CompressionReader{
 		reader:       reader,
@@ -38,6 +39,7 @@ func (cr *CompressionReader) Read(p []byte) (int, error) {
 	return cr.reader.Read(p)
 }
 
+// Close closes the underlying reader and decompressor if present.
 func (cr *CompressionReader) Close() error {
 	if cr.decompressor != nil {
 		cr.decompressor.Close()
@@ -45,6 +47,7 @@ func (cr *CompressionReader) Close() error {
 	return cr.reader.Close()
 }
 
+// CompressStream compresses data from reader into writer using zstd and returns bytes written.
 func CompressStream(writer io.Writer, reader io.Reader) (int64, error) {
 	encoder, err := zstd.NewWriter(writer)
 	if err != nil {
@@ -54,25 +57,4 @@ func CompressStream(writer io.Writer, reader io.Reader) (int64, error) {
 
 	written, err := io.Copy(encoder, reader)
 	return written, err
-}
-
-func CompressBuffer(data []byte) (*bytes.Buffer, error) {
-	var buf bytes.Buffer
-	encoder, err := zstd.NewWriter(&buf)
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = encoder.Write(data)
-	if err != nil {
-		_ = encoder.Close()
-		return nil, err
-	}
-
-	err = encoder.Close()
-	if err != nil {
-		return nil, err
-	}
-
-	return &buf, nil
 }

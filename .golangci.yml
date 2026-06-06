@@ -10,8 +10,26 @@ output:
   print-linter-name: true
 
 linters:
-  disable:
-    - unused
+  enable:
+    - gofmt
+    - govet
+    - revive
+    - staticcheck
+    - gosimple
+    - ineffassign
+    - misspell
+    - goimports
+
+linters-settings:
+  revive:
+    rules:
+      - name: exported
+        severity: warning
+      - name: var-naming
+        severity: warning
+        arguments:
+          - []
+          - ["ID", "URL", "HTTP", "JSON", "XML", "API", "UI", "IDP", "IP", "VM", "CPU", "RAM", "DNS", "CORS", "CorsDomains"]
 
 issues:
   max-issues-per-linter: 0

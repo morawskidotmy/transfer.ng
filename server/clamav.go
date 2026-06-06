@@ -17,7 +17,7 @@ const clamavScanStatusOK = "OK"
 func (s *Server) scanHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 
-	filename := sanitize(vars["filename"])
+	filename := sanitizePath(vars["filename"])
 
 	contentLength := r.ContentLength
 	contentType := r.Header.Get("Content-Type")
@@ -64,13 +64,18 @@ func (s *Server) performScan(path string) (string, error) {
 		responseCh <- response
 	}(responseCh, errCh)
 
+	timeout := s.clamavTimeout
+	if timeout == 0 {
+		timeout = 60 * time.Second
+	}
+
 	select {
 	case err := <-errCh:
 		return "", err
 	case response := <-responseCh:
 		st := <-response
 		return st.Status, nil
-	case <-time.After(time.Second * 60):
+	case <-time.After(timeout):
 		return "", errors.New("clamav scan timeout")
 	}
 }

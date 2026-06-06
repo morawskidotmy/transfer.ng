@@ -26,6 +26,7 @@ curl --upload-file hello.txt http://localhost:8080/hello.txt
 | `--tls-cert-file` | `TLS_CERT_FILE` | `""` | Path to TLS certificate file |
 | `--tls-private-key` | `TLS_PRIVATE_KEY` | `""` | Path to TLS private key file |
 | `--lets-encrypt-hosts` | `HOSTS` | `""` | Comma-separated hosts for Let's Encrypt auto-TLS |
+| `--lets-encrypt-cache` | `LETS_ENCRYPT_CACHE` | `"./cache/"` | Directory for Let's Encrypt certificate cache |
 | `--force-https` | `FORCE_HTTPS` | `false` | Redirect all HTTP to HTTPS |
 | `--proxy-path` | `PROXY_PATH` | `""` | URL prefix when behind a reverse proxy (e.g. `/sharing`) |
 | `--proxy-port` | `PROXY_PORT` | `""` | Port of the proxy when behind one |
@@ -85,7 +86,8 @@ curl --upload-file hello.txt http://localhost:8080/hello.txt
 | Flag | Env Var | Default | Description |
 |------|---------|---------|-------------|
 | `--max-upload-size` | `MAX_UPLOAD_SIZE` | `0` | Max upload size in KB (`0` = unlimited) |
-| `--rate-limit` | `RATE_LIMIT` | `0` | Max requests per minute per IP (`0` = unlimited) |
+| `--rate-limit` | `RATE_LIMIT` | `0` | Max download requests per minute per IP (`0` = unlimited) |
+| `--rate-limit-uploads` | `RATE_LIMIT_UPLOADS` | `0` | Max upload requests per minute per IP (`0` = unlimited) |
 | `--max-dir-size` | `MAX_DIR_SIZE` | `0` | Max total size of files in a directory (e.g. `1g`, `500m`). `0` = unlimited |
 | `--max-dir-files` | `MAX_DIR_FILES` | `0` | Max number of files per directory. `0` = unlimited |
 | `--max-archive-files` | `MAX_ARCHIVE_FILES` | `100` | Max files in a zip/tar.gz archive download |
@@ -95,7 +97,7 @@ curl --upload-file hello.txt http://localhost:8080/hello.txt
 | Flag | Env Var | Default | Description |
 |------|---------|---------|-------------|
 | `--purge-days` | `PURGE_DAYS` | `0` | Auto-delete files after N days |
-| `--purge-interval` | `PURGE_INTERVAL` | `0` | How often (hours) to check for expired files |
+| `--purge-interval` | `PURGE_INTERVAL` | `24` (when `--purge-days` set) | How often (hours) to check for expired files |
 
 ### Compression
 
@@ -103,11 +105,21 @@ curl --upload-file hello.txt http://localhost:8080/hello.txt
 |------|---------|---------|-------------|
 | `--compress-large` | `COMPRESS_LARGE` | `10m` | Transparently zstd-compress files larger than this (e.g. `10m`, `1g`). Set to `0` to disable |
 
+### Timeouts
+
+| Flag | Env Var | Default | Description |
+|------|---------|---------|-------------|
+| `--read-header-timeout` | `READ_HEADER_TIMEOUT` | `10s` | HTTP read header timeout |
+| `--read-timeout` | `READ_TIMEOUT` | `5m` | HTTP read timeout |
+| `--write-timeout` | `WRITE_TIMEOUT` | `10m` | HTTP write timeout |
+| `--idle-timeout` | `IDLE_TIMEOUT` | `2m` | HTTP idle timeout |
+
 ### Virus Scanning
 
 | Flag | Env Var | Default | Description |
 |------|---------|---------|-------------|
 | `--clamav-host` | `CLAMAV_HOST` | `""` | ClamAV daemon address |
+| `--clamav-timeout` | `CLAMAV_TIMEOUT` | `60s` | ClamAV scan timeout |
 | `--perform-clamav-prescan` | `PERFORM_CLAMAV_PRESCAN` | `false` | Scan every upload with ClamAV before storing |
 | `--virustotal-key` | `VIRUSTOTAL_KEY` | `""` | VirusTotal API key |
 
