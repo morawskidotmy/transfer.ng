@@ -160,9 +160,12 @@ func (s *Server) registerFileInDir(ctx context.Context, dirToken, filename strin
 		idx = dirIndex{Created: time.Now()}
 	}
 
-	for _, f := range idx.Files {
+	for i, f := range idx.Files {
 		if f.Name == filename {
-			return nil
+			idx.TotalSize -= f.Size
+			idx.Files[i].Size = fileSize
+			idx.TotalSize += fileSize
+			return s.saveDirIndex(ctx, dirToken, idx)
 		}
 	}
 
@@ -378,28 +381,22 @@ func applyPagination(entries []dirFileEntry, page, limit int) (paginated []dirFi
 	return paginated, totalPages, adjustedPage
 }
 
-// writeDirHTMLResponse writes the HTML directory listing
-func (s *Server) writeDirHTMLResponse(w http.ResponseWriter, r *http.Request, dirToken string, subdirs []dirSubdirEntry, entries []dirFileEntry, page, limit, totalFiles, totalPages int) {
-	data := struct {
-		Token      string
-		WebAddress string
-		Subdirs    []dirSubdirEntry
-		Files      []dirFileEntry
-		Page       int
-		Limit      int
-		TotalFiles int
-		TotalPages int
-	}{
-		Token:      dirToken,
-		WebAddress: resolveWebAddress(r, s.proxyPath, s.proxyPort),
-		Subdirs:    subdirs,
-		Files:      entries,
-		Page:       page,
-		Limit:      limit,
-		TotalFiles: totalFiles,
-		TotalPages: totalPages,
-	}
+// directoryListData is the unified template data for both root and subdirectory listings.
+type directoryListData struct {
+	Token       string
+	Subpath     string
+	RootURL     string
+	Breadcrumbs []breadcrumb
+	Subdirs     []dirSubdirEntry
+	Files       []dirFileEntry
+	Page        int
+	Limit       int
+	TotalFiles  int
+	TotalPages  int
+	WebAddress  string
+}
 
+func (s *Server) writeDirectoryHTMLResponse(w http.ResponseWriter, data directoryListData) {
 	s.htmlTemplatesMutex.RLock()
 	err := s.htmlTemplates.ExecuteTemplate(w, "directory.html", data)
 	s.htmlTemplatesMutex.RUnlock()
@@ -409,23 +406,20 @@ func (s *Server) writeDirHTMLResponse(w http.ResponseWriter, r *http.Request, di
 	}
 }
 
-// writeDirTextResponse writes the plain text directory listing
-func writeDirTextResponse(w http.ResponseWriter, subdirs []dirSubdirEntry, entries []dirFileEntry, page, limit, totalFiles, totalPages int) {
+func writeDirectoryTextResponse(w http.ResponseWriter, data directoryListData) {
 	w.Header().Set("Content-Type", "text/plain")
-	w.Header().Set("X-Total-Files", strconv.Itoa(totalFiles))
-	if limit > 0 {
-		w.Header().Set("X-Page", strconv.Itoa(page))
-		w.Header().Set("X-Limit", strconv.Itoa(limit))
-		w.Header().Set("X-Total-Pages", strconv.Itoa(totalPages))
+	w.Header().Set("X-Total-Files", strconv.Itoa(data.TotalFiles))
+	if data.Limit > 0 {
+		w.Header().Set("X-Page", strconv.Itoa(data.Page))
+		w.Header().Set("X-Limit", strconv.Itoa(data.Limit))
+		w.Header().Set("X-Total-Pages", strconv.Itoa(data.TotalPages))
 	}
 	var body strings.Builder
-	// Subdirectories first (with trailing /)
-	for _, sd := range subdirs {
+	for _, sd := range data.Subdirs {
 		body.WriteString(sd.URL)
 		body.WriteString("\n")
 	}
-	// Then files
-	for _, e := range entries {
+	for _, e := range data.Files {
 		body.WriteString(e.URL)
 		body.WriteString("\n")
 	}
@@ -501,9 +495,11 @@ func buildBreadcrumbs(r *http.Request, token, subpath, proxyPath, proxyPort stri
 	return crumbs
 }
 
-// subDirHandler handles GET /{token}/{subpath}/: it lists files and subdirectories
-// at a specific subpath within a directory.
-func (s *Server) subDirHandler(w http.ResponseWriter, r *http.Request) {
+// listDirectoryHandler handles GET /{token}/ and GET /{token}/{subpath}/:
+// it lists files and subdirectories at the given path within a directory.
+// Browsers receive an HTML page, other clients (curl) receive a plain URL list.
+// Supports pagination via ?page=N&limit=N query parameters.
+func (s *Server) listDirectoryHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	dirToken := vars["token"]
 	subpath := vars["subpath"]
@@ -513,110 +509,13 @@ func (s *Server) subDirHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Sanitize subpath
-	subpath = sanitizePath(subpath)
-	if subpath == "" || subpath == "_" {
-		// Redirect to root directory
-		http.Redirect(w, r, path.Join(s.proxyPath, dirToken)+"/", http.StatusMovedPermanently)
-		return
-	}
-
-	idx, err := s.loadDirIndex(r.Context(), dirToken)
-	if err != nil {
-		s.respondError(w, http.StatusNotFound, "", "directory: %v", err)
-		return
-	}
-
-	// Filter and split entries
-	subdirs, dirFiles := filterAndSplitDirEntries(idx.Files, subpath)
-
-	// Build file entries with URLs
-	var fileEntries []dirFileEntry
-	for _, f := range dirFiles {
-		relativeURL, _ := url.Parse(path.Join(s.proxyPath, dirToken, escapePathForURL(f.Name)))
-		fileEntries = append(fileEntries, dirFileEntry{
-			Name: f.Name,
-			URL:  resolveURL(r, relativeURL, s.proxyPort),
-		})
-	}
-
-	// Build subdirectory URLs
-	for i := range subdirs {
-		relativeURL, _ := url.Parse(path.Join(s.proxyPath, dirToken, subpath, subdirs[i].Name) + "/")
-		subdirs[i].URL = resolveURL(r, relativeURL, s.proxyPort)
-	}
-
-	// Build breadcrumbs
-	crumbs := buildBreadcrumbs(r, dirToken, subpath, s.proxyPath, s.proxyPort)
-
-	w.Header().Set("Vary", "Accept")
-
-	if acceptsHTML(r.Header) {
-		s.writeSubDirHTMLResponse(w, r, dirToken, subpath, crumbs, subdirs, fileEntries)
-		return
-	}
-
-	s.writeSubDirTextResponse(w, subdirs, fileEntries)
-}
-
-// writeSubDirHTMLResponse writes the HTML subdirectory listing
-func (s *Server) writeSubDirHTMLResponse(w http.ResponseWriter, r *http.Request, dirToken, subpath string, breadcrumbs []breadcrumb, subdirs []dirSubdirEntry, files []dirFileEntry) {
-	data := struct {
-		Token       string
-		Subpath     string
-		Breadcrumbs []breadcrumb
-		Subdirs     []dirSubdirEntry
-		Files       []dirFileEntry
-		WebAddress  string
-	}{
-		Token:       dirToken,
-		Subpath:     subpath,
-		Breadcrumbs: breadcrumbs,
-		Subdirs:     subdirs,
-		Files:       files,
-		WebAddress:  resolveWebAddress(r, s.proxyPath, s.proxyPort),
-	}
-
-	s.htmlTemplatesMutex.RLock()
-	err := s.htmlTemplates.ExecuteTemplate(w, "directory.html", data)
-	s.htmlTemplatesMutex.RUnlock()
-	if err != nil {
-		s.logger.Printf("subdirectory: failed to execute template: %v", err)
-		http.Error(w, "Internal server error.", http.StatusInternalServerError)
-	}
-}
-
-// writeSubDirTextResponse writes the plain text subdirectory listing
-func (s *Server) writeSubDirTextResponse(w http.ResponseWriter, subdirs []dirSubdirEntry, files []dirFileEntry) {
-	w.Header().Set("Content-Type", "text/plain")
-	var body strings.Builder
-
-	// Subdirectories first
-	for _, sd := range subdirs {
-		body.WriteString(sd.URL)
-		body.WriteString("\n")
-	}
-
-	// Then files
-	for _, f := range files {
-		body.WriteString(f.URL)
-		body.WriteString("\n")
-	}
-
-	_, _ = w.Write([]byte(body.String()))
-}
-
-// dirHandler handles GET /{token}/ and GET /{token}: it lists the files in a
-// directory. Browsers receive an HTML page, other clients (curl) receive a
-// plain list of direct download URLs.
-// Supports pagination via ?page=N&limit=N query parameters.
-func (s *Server) dirHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	dirToken := vars["token"]
-
-	if len(dirToken) > maxTokenLength {
-		s.respondError(w, http.StatusBadRequest, "token too long", "")
-		return
+	if subpath != "" {
+		subpath = sanitizePath(subpath)
+		if subpath == "" || subpath == "_" {
+			// #nosec G710 -- dirToken is server-generated, subpath is sanitized
+			http.Redirect(w, r, path.Join(s.proxyPath, dirToken)+"/", http.StatusMovedPermanently)
+			return
+		}
 	}
 
 	page, limit := parsePaginationParams(r)
@@ -627,13 +526,11 @@ func (s *Server) dirHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get immediate children only (not recursive)
-	rootSubdirs, immediateFiles := filterAndSplitDirEntries(idx.Files, "")
+	subdirs, dirFiles := filterAndSplitDirEntries(idx.Files, subpath)
 
-	// Build entries only for immediate files
 	var entries []dirFileEntry
 	var staleFiles []string
-	for _, f := range immediateFiles {
+	for _, f := range dirFiles {
 		if _, err := s.storage.Head(r.Context(), dirToken, f.Name); err != nil {
 			if s.storage.IsNotExist(err) {
 				staleFiles = append(staleFiles, f.Name)
@@ -642,7 +539,7 @@ func (s *Server) dirHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		relativeURL, _ := url.Parse(path.Join(s.proxyPath, dirToken, escapePathForURL(f.Name)))
 		entries = append(entries, dirFileEntry{
-			Name: f.Name,
+			Name: path.Base(f.Name),
 			URL:  resolveURL(r, relativeURL, s.proxyPort),
 		})
 	}
@@ -651,23 +548,41 @@ func (s *Server) dirHandler(w http.ResponseWriter, r *http.Request) {
 		s.removeStaleFilesFromDir(r.Context(), dirToken, staleFiles)
 	}
 
-	// Build URLs for subdirectories
-	for i := range rootSubdirs {
-		relativeURL, _ := url.Parse(path.Join(s.proxyPath, dirToken, rootSubdirs[i].Name) + "/")
-		rootSubdirs[i].URL = resolveURL(r, relativeURL, s.proxyPort)
+	subdirBase := path.Join(s.proxyPath, dirToken, subpath)
+	for i := range subdirs {
+		relativeURL, _ := url.Parse(path.Join(subdirBase, subdirs[i].Name) + "/")
+		subdirs[i].URL = resolveURL(r, relativeURL, s.proxyPort)
 	}
+
+	crumbs := buildBreadcrumbs(r, dirToken, subpath, s.proxyPath, s.proxyPort)
+	rootRelative, _ := url.Parse(path.Join(s.proxyPath, dirToken) + "/")
+	rootURL := resolveURL(r, rootRelative, s.proxyPort)
 
 	totalFiles := len(entries)
 	entries, totalPages, page := applyPagination(entries, page, limit)
 
+	data := directoryListData{
+		Token:       dirToken,
+		Subpath:     subpath,
+		RootURL:     rootURL,
+		Breadcrumbs: crumbs,
+		Subdirs:     subdirs,
+		Files:       entries,
+		Page:        page,
+		Limit:       limit,
+		TotalFiles:  totalFiles,
+		TotalPages:  totalPages,
+		WebAddress:  resolveWebAddress(r, s.proxyPath, s.proxyPort),
+	}
+
 	w.Header().Set("Vary", "Accept")
 
 	if acceptsHTML(r.Header) {
-		s.writeDirHTMLResponse(w, r, dirToken, rootSubdirs, entries, page, limit, totalFiles, totalPages)
+		s.writeDirectoryHTMLResponse(w, data)
 		return
 	}
 
-	writeDirTextResponse(w, rootSubdirs, entries, page, limit, totalFiles, totalPages)
+	writeDirectoryTextResponse(w, data)
 }
 
 func (s *Server) checkDirLimits(w http.ResponseWriter, r *http.Request, dirToken string) (dirIndex, bool) {

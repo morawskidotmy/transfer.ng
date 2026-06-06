@@ -1456,6 +1456,22 @@ func (s *Server) headHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) redirectToSubdirectory(w http.ResponseWriter, r *http.Request, token, filename string) bool {
+	idx, err := s.loadDirIndex(r.Context(), token)
+	if err != nil {
+		return false
+	}
+	prefix := filename + "/"
+	for _, f := range idx.Files {
+		if strings.HasPrefix(f.Name, prefix) {
+			// #nosec G710 -- token is server-generated, filename is sanitized
+			http.Redirect(w, r, path.Join(s.proxyPath, token, filename)+"/", http.StatusMovedPermanently)
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) getHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 
@@ -1470,6 +1486,9 @@ func (s *Server) getHandler(w http.ResponseWriter, r *http.Request) {
 
 	metadata, err := s.checkMetadata(r.Context(), token, filename, true)
 	if err != nil {
+		if action == "" && s.redirectToSubdirectory(w, r, token, filename) {
+			return
+		}
 		s.respondError(w, http.StatusNotFound, "", "Error metadata: %s", err.Error())
 		return
 	}
