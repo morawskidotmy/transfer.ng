@@ -120,3 +120,28 @@ func CloseCheck(c io.Closer) {
 		log.Printf("close error: %v", err)
 	}
 }
+
+// SafeInt64ToUint64 converts int64 to uint64, clamping negative values to 0.
+func SafeInt64ToUint64(v int64) uint64 {
+	if v < 0 {
+		return 0
+	}
+	return uint64(v)
+}
+
+// SafeUint64ToInt64 converts uint64 to int64, capping at MaxInt64 if overflow.
+func SafeUint64ToInt64(v uint64) int64 {
+	const maxInt64 = 1<<63 - 1
+	if v > maxInt64 {
+		return maxInt64
+	}
+	return int64(v)
+}
+
+// SafeIntToUint64 converts int to uint64, clamping negative values to 0.
+func SafeIntToUint64(v int) uint64 {
+	if v < 0 {
+		return 0
+	}
+	return uint64(v)
+}

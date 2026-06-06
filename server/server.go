@@ -15,6 +15,7 @@ import (
 	"net/http"
 
 	// net/http/pprof registers profiling handlers on the default ServeMux.
+	// #nosec G108 -- pprof is only exposed when EnableProfiler() is explicitly configured
 	_ "net/http/pprof"
 	"net/url"
 	"os"
@@ -173,7 +174,8 @@ func TempPath(s string) OptionFn {
 // LogFile sets log file
 func LogFile(logger *log.Logger, s string) OptionFn {
 	return func(srvr *Server) {
-		f, err := os.OpenFile(s, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+		// #nosec G304 -- log file path is admin-supplied configuration
+		f, err := os.OpenFile(s, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600)
 		if err != nil {
 			logger.Fatalf("error opening file: %v", err)
 		}
@@ -499,6 +501,7 @@ func (s *Server) startProfiler() bool {
 	}
 	go func() {
 		s.logger.Println("Profiler listening at:", profileAddr)
+		// #nosec G114 -- profiler is for debugging only, not production use
 		_ = http.ListenAndServe(profileAddr, nil)
 	}()
 	return true

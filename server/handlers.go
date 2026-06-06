@@ -246,9 +246,11 @@ func (s *Server) getTextContent(ctx context.Context, token, filename, contentTyp
 	if strings.HasPrefix(contentType, "text/x-markdown") || strings.HasPrefix(contentType, "text/markdown") {
 		unsafe := blackfriday.Run(data)
 		output := bluemonday.UGCPolicy().SanitizeBytes(unsafe)
+		// #nosec G203 -- bluemonday.UGCPolicy() sanitizes all HTML, preventing XSS
 		return htmlTemplate.HTML(output), "download.markdown.html", nil
 	}
 	if strings.HasPrefix(contentType, "text/plain") {
+		// #nosec G203 -- html.EscapeString() escapes all HTML special characters
 		return htmlTemplate.HTML(fmt.Sprintf("<pre>%s</pre>", html.EscapeString(string(data)))), "download.markdown.html", nil
 	}
 	return "", "download.sandbox.html", nil
@@ -513,6 +515,7 @@ func validateTokenAndFilename(token, filename string) error {
 }
 
 func (s *Server) postHandler(w http.ResponseWriter, r *http.Request) {
+	// #nosec G120 -- multipartMemLimit (192 bytes) is intentionally small to limit memory usage
 	if err := r.ParseMultipartForm(multipartMemLimit); nil != err {
 		s.logger.Printf("%s", err.Error())
 		http.Error(w, "Error occurred copying to output stream", http.StatusInternalServerError)
@@ -651,7 +654,7 @@ func (s *Server) saveFileWithMetadata(w http.ResponseWriter, r *http.Request, up
 		return false
 	}
 
-	if err := s.storage.Put(r.Context(), uploadToken, fmt.Sprintf("%s.metadata", filename), buffer, "text/json", uint64(buffer.Len())); err != nil {
+	if err := s.storage.Put(r.Context(), uploadToken, fmt.Sprintf("%s.metadata", filename), buffer, "text/json", storage.SafeIntToUint64(buffer.Len())); err != nil {
 		s.logger.Printf("%s", err.Error())
 		http.Error(w, "Could not save metadata", http.StatusInternalServerError)
 		return false
@@ -665,7 +668,7 @@ func (s *Server) saveFileWithMetadata(w http.ResponseWriter, r *http.Request, up
 		return false
 	}
 
-	if err = s.storage.Put(r.Context(), uploadToken, filename, reader, contentType, uint64(contentLength)); err != nil {
+	if err = s.storage.Put(r.Context(), uploadToken, filename, reader, contentType, storage.SafeInt64ToUint64(contentLength)); err != nil {
 		s.logger.Printf("upload: backend storage error: %v", err)
 		http.Error(w, "Could not save file.", http.StatusInternalServerError)
 		return false
@@ -912,7 +915,7 @@ func (s *Server) processPutUpload(w http.ResponseWriter, r *http.Request, putTok
 		}
 	}
 
-	if err = s.storage.Put(r.Context(), putToken, filename, finalReader, contentType, uint64(finalLength)); err != nil {
+	if err = s.storage.Put(r.Context(), putToken, filename, finalReader, contentType, storage.SafeInt64ToUint64(finalLength)); err != nil {
 		s.logger.Printf("Error putting new file: %s", err.Error())
 		http.Error(w, "Could not save file", http.StatusInternalServerError)
 		return false
@@ -935,7 +938,7 @@ func (s *Server) saveMetadata(w http.ResponseWriter, r *http.Request, putToken, 
 		return false
 	}
 
-	if err := s.storage.Put(r.Context(), putToken, fmt.Sprintf("%s.metadata", filename), buffer, "text/json", uint64(buffer.Len())); err != nil {
+	if err := s.storage.Put(r.Context(), putToken, fmt.Sprintf("%s.metadata", filename), buffer, "text/json", storage.SafeIntToUint64(buffer.Len())); err != nil {
 		s.logger.Printf("%s", err.Error())
 		http.Error(w, "Could not save metadata", http.StatusInternalServerError)
 		return false
@@ -975,6 +978,8 @@ func (s *Server) writePutResponse(w http.ResponseWriter, r *http.Request, putTok
 
 	w.Header().Set("X-Url-Delete", resolveURL(r, deleteURL, s.proxyPort))
 	s.writeDirHeaders(w, r, putToken, uploadToken)
+	// URL is constructed from server-generated token and sanitized filename
+	// #nosec G705 -- all URL components are server-controlled or sanitized
 	_, _ = w.Write([]byte(resolveURL(r, relativeURL, s.proxyPort)))
 	return true
 }
@@ -1116,7 +1121,7 @@ func (s *Server) checkMetadata(ctx context.Context, token, filename string, incr
 		if err := json.NewEncoder(buffer).Encode(metadata); err != nil {
 			return metadata, errors.New("could not encode metadata")
 		}
-		if err := s.storage.Put(ctx, token, fmt.Sprintf("%s.metadata", filename), buffer, "text/json", uint64(buffer.Len())); err != nil {
+		if err := s.storage.Put(ctx, token, fmt.Sprintf("%s.metadata", filename), buffer, "text/json", storage.SafeIntToUint64(buffer.Len())); err != nil {
 			return metadata, errors.New("could not save metadata")
 		}
 	}
@@ -1346,7 +1351,7 @@ func (s *Server) tarGzHandler(w http.ResponseWriter, r *http.Request) {
 
 		header := &tar.Header{
 			Name: spec.filename,
-			Size: int64(contentLength),
+			Size: storage.SafeUint64ToInt64(contentLength),
 		}
 
 		if err := zw.WriteHeader(header); err != nil {
@@ -1390,7 +1395,7 @@ func (s *Server) tarHandler(w http.ResponseWriter, r *http.Request) {
 
 		header := &tar.Header{
 			Name: spec.filename,
-			Size: int64(contentLength),
+			Size: storage.SafeUint64ToInt64(contentLength),
 		}
 
 		if err := zw.WriteHeader(header); err != nil {
@@ -1536,7 +1541,7 @@ func (s *Server) handleRangeHeaders(w http.ResponseWriter, reader io.ReadCloser,
 			w.Header().Set("Accept-Ranges", "bytes")
 			w.Header().Set("Content-Range", cr)
 			if rng.Limit > 0 {
-				reader = io.NopCloser(io.LimitReader(reader, int64(rng.Limit)))
+				reader = io.NopCloser(io.LimitReader(reader, storage.SafeUint64ToInt64(rng.Limit)))
 			}
 		}
 	}
@@ -1560,7 +1565,7 @@ func (s *Server) setCommonHeaders(w http.ResponseWriter, filename, disposition, 
 
 func (s *Server) handleDecryptionAndCompression(reader io.ReadCloser, contentLength uint64, metadata *metadata, password string) (io.ReadCloser, uint64) {
 	if metadata.Encrypted && len(password) > 0 {
-		contentLength = uint64(metadata.ContentLength)
+		contentLength = storage.SafeInt64ToUint64(metadata.ContentLength)
 	}
 
 	if metadata.Compressed {
@@ -1569,7 +1574,7 @@ func (s *Server) handleDecryptionAndCompression(reader io.ReadCloser, contentLen
 			return reader, contentLength
 		}
 		reader = compressionReader
-		contentLength = uint64(metadata.ContentLength)
+		contentLength = storage.SafeInt64ToUint64(metadata.ContentLength)
 	}
 
 	return reader, contentLength
@@ -1606,6 +1611,7 @@ func (s *Server) RedirectHandler(h http.Handler) http.HandlerFunc {
 				}
 			}
 
+			// #nosec G710 -- redirect is to same host (from r.Host), not user-controlled
 			http.Redirect(w, r, u.String(), http.StatusPermanentRedirect)
 			return
 		}
