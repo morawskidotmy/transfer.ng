@@ -104,7 +104,7 @@ func (s *Server) recalculateDirSize(ctx context.Context, dirToken string, files 
 		}
 		// Legacy entry without size, check storage
 		if size, err := s.storage.Head(ctx, dirToken, entry.Name); err == nil {
-			totalSize += int64(size)
+			totalSize += storage.SafeUint64ToInt64(size)
 		}
 	}
 	return totalSize
@@ -115,7 +115,7 @@ func (s *Server) saveDirIndex(ctx context.Context, dirToken string, idx dirIndex
 	if err := json.NewEncoder(buffer).Encode(idx); err != nil {
 		return err
 	}
-	return s.storage.Put(ctx, dirToken, dirIndexName, buffer, "text/json", uint64(buffer.Len()))
+	return s.storage.Put(ctx, dirToken, dirIndexName, buffer, "text/json", storage.SafeIntToUint64(buffer.Len()))
 }
 
 // createDirectory creates a new, empty directory and returns its token and
@@ -614,6 +614,8 @@ func (s *Server) deleteDirHandler(w http.ResponseWriter, r *http.Request) {
 	s.deleteDirIndex(r.Context(), dirToken)
 
 	w.Header().Set("Content-Type", "text/plain")
+	// dirToken is server-generated, safe to output
+	// #nosec G705 -- dirToken is server-generated random token
 	_, _ = fmt.Fprintf(w, "Deleted %d file(s) from directory %s\n", deletedCount, dirToken)
 }
 
@@ -741,7 +743,7 @@ func (s *Server) dirTarGzHandler(w http.ResponseWriter, r *http.Request) {
 
 		header := &tar.Header{
 			Name: entry.Name,
-			Size: int64(contentLength),
+			Size: storage.SafeUint64ToInt64(contentLength),
 		}
 
 		if err := zw.WriteHeader(header); err != nil {

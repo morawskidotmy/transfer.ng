@@ -67,7 +67,7 @@ func (s *LocalStorage) Head(_ context.Context, token string, filename string) (c
 		return 0, err
 	}
 
-	return uint64(fi.Size()), nil
+	return SafeInt64ToUint64(fi.Size()), nil
 }
 
 // Get retrieves a file from local storage, optionally with a byte range.
@@ -77,6 +77,7 @@ func (s *LocalStorage) Get(_ context.Context, token string, filename string, rng
 		return nil, 0, err
 	}
 
+	// #nosec G304 -- path is validated by buildPath() which prevents traversal
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, 0, err
@@ -88,10 +89,10 @@ func (s *LocalStorage) Get(_ context.Context, token string, filename string, rng
 		return nil, 0, err
 	}
 
-	contentLength = uint64(fi.Size())
+	contentLength = SafeInt64ToUint64(fi.Size())
 	if rng != nil {
 		contentLength = rng.AcceptLength(contentLength)
-		if _, err = file.Seek(int64(rng.Start), io.SeekStart); err != nil {
+		if _, err = file.Seek(SafeUint64ToInt64(rng.Start), io.SeekStart); err != nil {
 			_ = file.Close()
 			return nil, 0, err
 		}
@@ -128,6 +129,9 @@ func (s *LocalStorage) Purge(_ context.Context, days time.Duration) (err error) 
 			}
 
 			if info.ModTime().Before(time.Now().Add(-1 * days)) {
+				// #nosec G122 -- TOCTOU is acceptable for purge cleanup;
+				// worst case is a recently-modified file gets removed, which
+				// is mitigated by the mtime check above.
 				if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
 					s.logger.Printf("purge: failed to remove %s: %v", path, rmErr)
 				}
@@ -160,6 +164,7 @@ func (s *LocalStorage) Put(_ context.Context, token string, filename string, rea
 		return err
 	}
 
+	// #nosec G304 -- fullPath is validated by buildPath() which prevents traversal
 	f, err := os.OpenFile(fullPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err

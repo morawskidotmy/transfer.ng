@@ -71,7 +71,7 @@ func (s *StorjStorage) Head(ctx context.Context, token string, filename string) 
 		return 0, err
 	}
 
-	contentLength = uint64(obj.System.ContentLength)
+	contentLength = SafeInt64ToUint64(obj.System.ContentLength)
 
 	return
 }
@@ -85,9 +85,9 @@ func (s *StorjStorage) Get(ctx context.Context, token string, filename string, r
 	var options *uplink.DownloadOptions
 	if rng != nil {
 		options = new(uplink.DownloadOptions)
-		options.Offset = int64(rng.Start)
+		options.Offset = SafeUint64ToInt64(rng.Start)
 		if rng.Limit > 0 {
-			options.Length = int64(rng.Limit)
+			options.Length = SafeUint64ToInt64(rng.Limit)
 		} else {
 			options.Length = -1
 		}
@@ -98,7 +98,7 @@ func (s *StorjStorage) Get(ctx context.Context, token string, filename string, r
 		return nil, 0, err
 	}
 
-	contentLength = uint64(download.Info().System.ContentLength)
+	contentLength = SafeInt64ToUint64(download.Info().System.ContentLength)
 	if rng != nil {
 		contentLength = rng.AcceptLength(contentLength)
 	}
@@ -145,7 +145,7 @@ func (s *StorjStorage) Put(ctx context.Context, token string, filename string, r
 		_ = writer.Abort()
 		return err
 	}
-	if uint64(n) != contentLength {
+	if SafeInt64ToUint64(n) != contentLength {
 		_ = writer.Abort()
 		return fmt.Errorf("short write: copied %d of %d bytes", n, contentLength)
 	}

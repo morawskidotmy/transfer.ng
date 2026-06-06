@@ -36,13 +36,13 @@ Easy and fast file sharing from the command-line. Self-hostable with support for
 
 ```bash
 # Upload a file
-curl --upload-file ./hello.txt https://transferng.example.com/hello.txt
+curl --upload-file ./hello.txt https://transfer.morawski.my/hello.txt
 
 # Download a file
-curl https://transferng.example.com/TOKEN/hello.txt -o hello.txt
+curl https://transfer.morawski.my/TOKEN/hello.txt -o hello.txt
 
 # Delete a file
-curl -X DELETE "https://transferng.example.com/TOKEN/hello.txt?delete=DELETION_TOKEN"
+curl -X DELETE "https://transfer.morawski.my/TOKEN/hello.txt?delete=DELETION_TOKEN"
 ```
 
 > **Self-hosting?** See [host.md](host.md) for a complete guide to all CLI flags, storage backends, TLS, authentication, and deployment scenarios.
@@ -67,7 +67,7 @@ Each upload returns two headers:
 ### Create a directory
 
 ```bash
-curl -X POST https://transferng.example.com/dir
+curl -X POST https://transfer.morawski.my/dir
 # Returns:
 # Upload-Token: s3cretUploadToken
 ```
@@ -78,7 +78,7 @@ The directory URL is returned in the `X-Url-Directory` response header.
 
 ```bash
 curl --upload-file ./report.pdf \
-    https://transferng.example.com/abcd1234/report.pdf \
+    https://transfer.morawski.my/abcd1234/report.pdf \
     -H "X-Upload-Token: s3cretUploadToken"
 ```
 
@@ -87,21 +87,21 @@ curl --upload-file ./report.pdf \
 ```bash
 cd ./myfolder && find . -type f | xargs -P 8 -I {} \
     curl -H "X-Upload-Token: s3cretUploadToken" \
-        --upload-file {} "https://transferng.example.com/abcd1234/{}"
+        --upload-file {} "https://transfer.morawski.my/abcd1234/{}"
 ```
 
 ### List a directory
 
 ```bash
-curl https://transferng.example.com/abcd1234/
+curl https://transfer.morawski.my/abcd1234/
 # Returns list of file URLs
 ```
 
 ### Download as archive
 
 ```bash
-curl -O https://transferng.example.com/abcd1234/.zip
-curl -O https://transferng.example.com/abcd1234/.tar.gz
+curl -O https://transfer.morawski.my/abcd1234/.zip
+curl -O https://transfer.morawski.my/abcd1234/.tar.gz
 ```
 
 ### Nested paths
@@ -110,20 +110,20 @@ Files can be uploaded with subdirectory structure preserved:
 
 ```bash
 curl --upload-file ./src/main.go \
-    https://transferng.example.com/abcd1234/src/main.go \
+    https://transfer.morawski.my/abcd1234/src/main.go \
     -H "X-Upload-Token: s3cretUploadToken"
 ```
 
 ### Delete a file
 
 ```bash
-curl -X DELETE "https://transferng.example.com/abcd1234/report.pdf?delete=DELETION_TOKEN"
+curl -X DELETE "https://transfer.morawski.my/abcd1234/report.pdf?delete=DELETION_TOKEN"
 ```
 
 Or using a header:
 
 ```bash
-curl -X DELETE https://transferng.example.com/abcd1234/report.pdf \
+curl -X DELETE https://transfer.morawski.my/abcd1234/report.pdf \
     -H "X-Deletion-Token: DELETION_TOKEN"
 ```
 
@@ -131,19 +131,19 @@ curl -X DELETE https://transferng.example.com/abcd1234/report.pdf \
 
 ```bash
 # Limit downloads
-curl --upload-file ./file.txt https://transferng.example.com/file.txt \
+curl --upload-file ./file.txt https://transfer.morawski.my/file.txt \
     -H "Max-Downloads: 5"
 
 # Set expiration
-curl --upload-file ./file.txt https://transferng.example.com/file.txt \
+curl --upload-file ./file.txt https://transfer.morawski.my/file.txt \
     -H "Max-Days: 7"
 
 # Encrypt on upload
-curl --upload-file ./file.txt https://transferng.example.com/file.txt \
+curl --upload-file ./file.txt https://transfer.morawski.my/file.txt \
     -H "X-Encrypt-Password: mysecret"
 
 # Decrypt on download
-curl https://transferng.example.com/TOKEN/file.txt \
+curl https://transfer.morawski.my/TOKEN/file.txt \
     -H "X-Decrypt-Password: mysecret"
 ```
 

@@ -36,6 +36,7 @@ const gDriveDirectoryMimeType = "application/vnd.google-apps.folder"
 // NewGDriveStorage is the factory for GDrive
 func NewGDriveStorage(ctx context.Context, clientJSONFilepath string, localConfigPath string, basedir string, chunkSize int, logger *log.Logger) (*GDrive, error) {
 
+	// #nosec G304 -- clientJSONFilepath is admin-supplied configuration, not user input
 	b, err := os.ReadFile(clientJSONFilepath)
 	if err != nil {
 		return nil, err
@@ -66,6 +67,7 @@ func NewGDriveStorage(ctx context.Context, clientJSONFilepath string, localConfi
 func (s *GDrive) setupRoot() error {
 	rootFileConfig := filepath.Join(s.localConfigPath, gDriveRootConfigFile)
 
+	// #nosec G304 -- rootFileConfig is admin-supplied configuration path
 	rootID, err := os.ReadFile(rootFileConfig)
 	if err != nil && !os.IsNotExist(err) {
 		return err
@@ -195,7 +197,7 @@ func (s *GDrive) Head(ctx context.Context, token string, filename string) (conte
 		return
 	}
 
-	contentLength = uint64(fi.Size)
+	contentLength = SafeInt64ToUint64(fi.Size)
 
 	return
 }
@@ -221,7 +223,7 @@ func (s *GDrive) Get(ctx context.Context, token string, filename string, rng *Ra
 		return
 	}
 
-	contentLength = uint64(fi.Size)
+	contentLength = SafeInt64ToUint64(fi.Size)
 
 	fileGetCall := s.service.Files.Get(fileID)
 	if rng != nil {
@@ -389,6 +391,7 @@ func getGDriveTokenFromWeb(ctx context.Context, config *oauth2.Config, logger *l
 
 // Retrieves a token from a local file.
 func gDriveTokenFromFile(file string) (*oauth2.Token, error) {
+	// #nosec G304 -- file path is constructed from admin-supplied localConfigPath
 	f, err := os.Open(file)
 	if err != nil {
 		return nil, err
@@ -402,12 +405,14 @@ func gDriveTokenFromFile(file string) (*oauth2.Token, error) {
 // Saves a token to a file path.
 func saveGDriveToken(path string, token *oauth2.Token, logger *log.Logger) {
 	logger.Printf("Saving credential file to: %s\n", path)
+	// #nosec G304 -- path is constructed from admin-supplied localConfigPath
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		logger.Fatalf("Unable to cache oauth token: %v", err)
 	}
 	defer CloseCheck(f)
 
+	// #nosec G117 -- token is stored locally, not exposed to network
 	err = json.NewEncoder(f).Encode(token)
 	if err != nil {
 		logger.Fatalf("Unable to encode oauth token: %v", err)
