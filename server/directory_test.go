@@ -37,6 +37,9 @@ func (s *suiteDirectory) SetUpTest(c *C) {
 	c.Assert(err, IsNil)
 
 	s.srvr = srvr
+	s.srvr.htmlTemplates = initHTMLTemplates()
+	s.srvr.textTemplates = initTextTemplates()
+	s.srvr.loadTemplatesFromAssets()
 	s.router = mux.NewRouter()
 	srvr.setupRoutes(s.router, http.NotFoundHandler())
 }
@@ -504,4 +507,104 @@ func (s *suiteDirectory) TestArchiveRouteMatches(c *C) {
 	w = s.do(req)
 	c.Assert(w.Code, Equals, http.StatusOK)
 	c.Assert(w.Header().Get("Content-Type"), Equals, "application/zip")
+}
+
+// TestHTMLRenderingRootDirectory verifies that browser requests to the root
+// directory listing render HTML without errors.
+func (s *suiteDirectory) TestHTMLRenderingRootDirectory(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/hello.txt", strings.NewReader("hello"))
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirURL := w.Header().Get("X-Url-Directory")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/", nil)
+	req.Header.Set("Accept", "text/html")
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(strings.Contains(w.Header().Get("Content-Type"), "text/html"), Equals, true)
+	c.Assert(strings.Contains(w.Body.String(), "hello.txt"), Equals, true)
+	c.Assert(strings.Contains(w.Body.String(), "[ DIRECTORY ]"), Equals, true)
+}
+
+// TestHTMLRenderingSubdirectory verifies that browser requests to subdirectory
+// listings render HTML with breadcrumbs and correct display names.
+func (s *suiteDirectory) TestHTMLRenderingSubdirectory(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/sub/deep.txt", strings.NewReader("content"))
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirURL := w.Header().Get("X-Url-Directory")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/sub/", nil)
+	req.Header.Set("Accept", "text/html")
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	body := w.Body.String()
+	c.Assert(strings.Contains(body, "deep.txt"), Equals, true)
+	c.Assert(strings.Contains(body, "root"), Equals, true)
+	c.Assert(strings.Contains(body, "sub"), Equals, true)
+}
+
+// TestSubdirectoryTrailingSlashRedirect verifies that requesting a subdirectory
+// path without a trailing slash redirects to the path with a trailing slash.
+func (s *suiteDirectory) TestSubdirectoryTrailingSlashRedirect(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/sub/file.txt", strings.NewReader("data"))
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirURL := w.Header().Get("X-Url-Directory")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/sub", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusMovedPermanently)
+	c.Assert(strings.Contains(w.Header().Get("Location"), "/sub/"), Equals, true)
+}
+
+// TestDuplicateUploadUpdatesSize verifies that re-uploading a file with the
+// same name to the same directory updates the stored size.
+func (s *suiteDirectory) TestDuplicateUploadUpdatesSize(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/file.txt", strings.NewReader("short"))
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirURL := w.Header().Get("X-Url-Directory")
+	uploadToken := w.Header().Get("X-Upload-Token")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	req = httptest.NewRequest("PUT", "http://example.com/"+dirToken+"/file.txt", strings.NewReader("a much longer content"))
+	req.Header.Set("X-Upload-Token", uploadToken)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+}
+
+// TestSubdirectoryPagination verifies that pagination works in subdirectory listings.
+func (s *suiteDirectory) TestSubdirectoryPagination(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/top.txt", strings.NewReader("top"))
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirURL := w.Header().Get("X-Url-Directory")
+	uploadToken := w.Header().Get("X-Upload-Token")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	for i := 0; i < 5; i++ {
+		req = httptest.NewRequest("PUT", "http://example.com/"+dirToken+"/sub/"+string(rune('a'+i))+".txt", strings.NewReader("data"))
+		req.Header.Set("X-Upload-Token", uploadToken)
+		c.Assert(s.do(req).Code, Equals, http.StatusOK)
+	}
+
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/sub/?page=1&limit=2", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Header().Get("X-Total-Files"), Equals, "5")
+	c.Assert(w.Header().Get("X-Page"), Equals, "1")
+	c.Assert(w.Header().Get("X-Total-Pages"), Equals, "3")
 }

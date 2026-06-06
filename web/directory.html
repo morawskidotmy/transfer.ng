@@ -124,7 +124,7 @@
 
     {{if .Breadcrumbs}}
     <div class="breadcrumbs">
-      <a href="/{{.Token}}/">root</a>
+      <a href="{{.RootURL}}">root</a>
       {{range .Breadcrumbs}}
       <span class="separator">/</span>
       <a href="{{.URL}}">{{.Name}}</a>
