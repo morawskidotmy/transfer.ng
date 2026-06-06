@@ -16,7 +16,6 @@ import (
 	"path"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -310,7 +309,7 @@ func (s *Server) createDirHandler(w http.ResponseWriter, r *http.Request) {
 	body.WriteString("Upload-Token: " + uploadToken + "\n")
 	body.WriteString("\n")
 	body.WriteString("Add files with:\n")
-	body.WriteString(fmt.Sprintf("  curl --upload-file ./file.txt %sfile.txt -H \"X-Upload-Token: %s\"\n", dirURL, uploadToken))
+	fmt.Fprintf(&body, "  curl --upload-file ./file.txt %sfile.txt -H \"X-Upload-Token: %s\"\n", dirURL, uploadToken)
 	_, _ = w.Write([]byte(body.String()))
 }
 
@@ -337,50 +336,16 @@ type dirFileEntry struct {
 	URL  string
 }
 
-// buildDirFileEntries creates file entries for the directory listing and identifies stale files
-func (s *Server) buildDirFileEntries(ctx context.Context, r *http.Request, dirToken string, files []fileEntry) ([]dirFileEntry, []string) {
-	type result struct {
-		entry dirFileEntry
-		stale string
-		ok    bool
-	}
+// dirSubdirEntry represents a subdirectory in directory listings
+type dirSubdirEntry struct {
+	Name string // "nested/" (display name with trailing slash)
+	URL  string // "/TOKEN/subpath/nested/" (full URL)
+}
 
-	results := make([]result, len(files))
-	var wg sync.WaitGroup
-
-	for i, entry := range files {
-		wg.Add(1)
-		go func(i int, entry fileEntry) {
-			defer wg.Done()
-			if _, err := s.storage.Head(ctx, dirToken, entry.Name); err != nil {
-				if s.storage.IsNotExist(err) {
-					results[i] = result{stale: entry.Name}
-				}
-				return
-			}
-			relativeURL, _ := url.Parse(path.Join(s.proxyPath, dirToken, escapePathForURL(entry.Name)))
-			results[i] = result{
-				entry: dirFileEntry{
-					Name: entry.Name,
-					URL:  resolveURL(r, relativeURL, s.proxyPort),
-				},
-				ok: true,
-			}
-		}(i, entry)
-	}
-	wg.Wait()
-
-	entries := make([]dirFileEntry, 0, len(files))
-	var staleFiles []string
-	for _, res := range results {
-		if res.ok {
-			entries = append(entries, res.entry)
-		} else if res.stale != "" {
-			staleFiles = append(staleFiles, res.stale)
-		}
-	}
-
-	return entries, staleFiles
+// breadcrumb represents a navigation breadcrumb
+type breadcrumb struct {
+	Name string // "subpath" (display name)
+	URL  string // "/TOKEN/subpath/" (full URL, root = "/TOKEN/")
 }
 
 // applyPagination slices the entries based on page and limit
@@ -414,10 +379,11 @@ func applyPagination(entries []dirFileEntry, page, limit int) (paginated []dirFi
 }
 
 // writeDirHTMLResponse writes the HTML directory listing
-func (s *Server) writeDirHTMLResponse(w http.ResponseWriter, r *http.Request, dirToken string, entries []dirFileEntry, page, limit, totalFiles, totalPages int) {
+func (s *Server) writeDirHTMLResponse(w http.ResponseWriter, r *http.Request, dirToken string, subdirs []dirSubdirEntry, entries []dirFileEntry, page, limit, totalFiles, totalPages int) {
 	data := struct {
 		Token      string
 		WebAddress string
+		Subdirs    []dirSubdirEntry
 		Files      []dirFileEntry
 		Page       int
 		Limit      int
@@ -426,6 +392,7 @@ func (s *Server) writeDirHTMLResponse(w http.ResponseWriter, r *http.Request, di
 	}{
 		Token:      dirToken,
 		WebAddress: resolveWebAddress(r, s.proxyPath, s.proxyPort),
+		Subdirs:    subdirs,
 		Files:      entries,
 		Page:       page,
 		Limit:      limit,
@@ -443,7 +410,7 @@ func (s *Server) writeDirHTMLResponse(w http.ResponseWriter, r *http.Request, di
 }
 
 // writeDirTextResponse writes the plain text directory listing
-func writeDirTextResponse(w http.ResponseWriter, entries []dirFileEntry, page, limit, totalFiles, totalPages int) {
+func writeDirTextResponse(w http.ResponseWriter, subdirs []dirSubdirEntry, entries []dirFileEntry, page, limit, totalFiles, totalPages int) {
 	w.Header().Set("Content-Type", "text/plain")
 	w.Header().Set("X-Total-Files", strconv.Itoa(totalFiles))
 	if limit > 0 {
@@ -452,10 +419,190 @@ func writeDirTextResponse(w http.ResponseWriter, entries []dirFileEntry, page, l
 		w.Header().Set("X-Total-Pages", strconv.Itoa(totalPages))
 	}
 	var body strings.Builder
+	// Subdirectories first (with trailing /)
+	for _, sd := range subdirs {
+		body.WriteString(sd.URL)
+		body.WriteString("\n")
+	}
+	// Then files
 	for _, e := range entries {
 		body.WriteString(e.URL)
 		body.WriteString("\n")
 	}
+	_, _ = w.Write([]byte(body.String()))
+}
+
+// filterAndSplitDirEntries filters files by subpath prefix and splits them into
+// immediate subdirectories and immediate files.
+func filterAndSplitDirEntries(files []fileEntry, subpath string) (subdirs []dirSubdirEntry, dirFiles []fileEntry) {
+	seen := make(map[string]bool)
+
+	for _, f := range files {
+		var remainder string
+		if subpath == "" {
+			// Root level: files without "/" are immediate, files with "/" define subdirs
+			remainder = f.Name
+		} else {
+			prefix := subpath + "/"
+			if !strings.HasPrefix(f.Name, prefix) {
+				continue
+			}
+			remainder = strings.TrimPrefix(f.Name, prefix)
+		}
+
+		if remainder == "" {
+			continue
+		}
+
+		slashIdx := strings.Index(remainder, "/")
+		if slashIdx == -1 {
+			// Immediate file
+			dirFiles = append(dirFiles, f)
+		} else {
+			// Subdirectory
+			subdirName := remainder[:slashIdx+1]
+			if !seen[subdirName] {
+				seen[subdirName] = true
+				subdirs = append(subdirs, dirSubdirEntry{
+					Name: subdirName,
+				})
+			}
+		}
+	}
+
+	return subdirs, dirFiles
+}
+
+// buildBreadcrumbs creates breadcrumb navigation for a subpath.
+func buildBreadcrumbs(r *http.Request, token, subpath, proxyPath, proxyPort string) []breadcrumb {
+	if subpath == "" {
+		return nil
+	}
+
+	parts := strings.Split(subpath, "/")
+	crumbs := make([]breadcrumb, 0, len(parts))
+
+	// Build cumulative paths
+	cumulative := ""
+	for _, part := range parts {
+		if cumulative == "" {
+			cumulative = part
+		} else {
+			cumulative = cumulative + "/" + part
+		}
+
+		relativeURL, _ := url.Parse(path.Join(proxyPath, token, cumulative) + "/")
+		crumbs = append(crumbs, breadcrumb{
+			Name: part,
+			URL:  resolveURL(r, relativeURL, proxyPort),
+		})
+	}
+
+	return crumbs
+}
+
+// subDirHandler handles GET /{token}/{subpath}/: it lists files and subdirectories
+// at a specific subpath within a directory.
+func (s *Server) subDirHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	dirToken := vars["token"]
+	subpath := vars["subpath"]
+
+	if len(dirToken) > maxTokenLength {
+		s.respondError(w, http.StatusBadRequest, "token too long", "")
+		return
+	}
+
+	// Sanitize subpath
+	subpath = sanitizePath(subpath)
+	if subpath == "" || subpath == "_" {
+		// Redirect to root directory
+		http.Redirect(w, r, path.Join(s.proxyPath, dirToken)+"/", http.StatusMovedPermanently)
+		return
+	}
+
+	idx, err := s.loadDirIndex(r.Context(), dirToken)
+	if err != nil {
+		s.respondError(w, http.StatusNotFound, "", "directory: %v", err)
+		return
+	}
+
+	// Filter and split entries
+	subdirs, dirFiles := filterAndSplitDirEntries(idx.Files, subpath)
+
+	// Build file entries with URLs
+	var fileEntries []dirFileEntry
+	for _, f := range dirFiles {
+		relativeURL, _ := url.Parse(path.Join(s.proxyPath, dirToken, escapePathForURL(f.Name)))
+		fileEntries = append(fileEntries, dirFileEntry{
+			Name: f.Name,
+			URL:  resolveURL(r, relativeURL, s.proxyPort),
+		})
+	}
+
+	// Build subdirectory URLs
+	for i := range subdirs {
+		relativeURL, _ := url.Parse(path.Join(s.proxyPath, dirToken, subpath, subdirs[i].Name) + "/")
+		subdirs[i].URL = resolveURL(r, relativeURL, s.proxyPort)
+	}
+
+	// Build breadcrumbs
+	crumbs := buildBreadcrumbs(r, dirToken, subpath, s.proxyPath, s.proxyPort)
+
+	w.Header().Set("Vary", "Accept")
+
+	if acceptsHTML(r.Header) {
+		s.writeSubDirHTMLResponse(w, r, dirToken, subpath, crumbs, subdirs, fileEntries)
+		return
+	}
+
+	s.writeSubDirTextResponse(w, subdirs, fileEntries)
+}
+
+// writeSubDirHTMLResponse writes the HTML subdirectory listing
+func (s *Server) writeSubDirHTMLResponse(w http.ResponseWriter, r *http.Request, dirToken, subpath string, breadcrumbs []breadcrumb, subdirs []dirSubdirEntry, files []dirFileEntry) {
+	data := struct {
+		Token       string
+		Subpath     string
+		Breadcrumbs []breadcrumb
+		Subdirs     []dirSubdirEntry
+		Files       []dirFileEntry
+		WebAddress  string
+	}{
+		Token:       dirToken,
+		Subpath:     subpath,
+		Breadcrumbs: breadcrumbs,
+		Subdirs:     subdirs,
+		Files:       files,
+		WebAddress:  resolveWebAddress(r, s.proxyPath, s.proxyPort),
+	}
+
+	s.htmlTemplatesMutex.RLock()
+	err := s.htmlTemplates.ExecuteTemplate(w, "directory.html", data)
+	s.htmlTemplatesMutex.RUnlock()
+	if err != nil {
+		s.logger.Printf("subdirectory: failed to execute template: %v", err)
+		http.Error(w, "Internal server error.", http.StatusInternalServerError)
+	}
+}
+
+// writeSubDirTextResponse writes the plain text subdirectory listing
+func (s *Server) writeSubDirTextResponse(w http.ResponseWriter, subdirs []dirSubdirEntry, files []dirFileEntry) {
+	w.Header().Set("Content-Type", "text/plain")
+	var body strings.Builder
+
+	// Subdirectories first
+	for _, sd := range subdirs {
+		body.WriteString(sd.URL)
+		body.WriteString("\n")
+	}
+
+	// Then files
+	for _, f := range files {
+		body.WriteString(f.URL)
+		body.WriteString("\n")
+	}
+
 	_, _ = w.Write([]byte(body.String()))
 }
 
@@ -480,10 +627,34 @@ func (s *Server) dirHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entries, staleFiles := s.buildDirFileEntries(r.Context(), r, dirToken, idx.Files)
+	// Get immediate children only (not recursive)
+	rootSubdirs, immediateFiles := filterAndSplitDirEntries(idx.Files, "")
+
+	// Build entries only for immediate files
+	var entries []dirFileEntry
+	var staleFiles []string
+	for _, f := range immediateFiles {
+		if _, err := s.storage.Head(r.Context(), dirToken, f.Name); err != nil {
+			if s.storage.IsNotExist(err) {
+				staleFiles = append(staleFiles, f.Name)
+			}
+			continue
+		}
+		relativeURL, _ := url.Parse(path.Join(s.proxyPath, dirToken, escapePathForURL(f.Name)))
+		entries = append(entries, dirFileEntry{
+			Name: f.Name,
+			URL:  resolveURL(r, relativeURL, s.proxyPort),
+		})
+	}
 
 	if len(staleFiles) > 0 {
 		s.removeStaleFilesFromDir(r.Context(), dirToken, staleFiles)
+	}
+
+	// Build URLs for subdirectories
+	for i := range rootSubdirs {
+		relativeURL, _ := url.Parse(path.Join(s.proxyPath, dirToken, rootSubdirs[i].Name) + "/")
+		rootSubdirs[i].URL = resolveURL(r, relativeURL, s.proxyPort)
 	}
 
 	totalFiles := len(entries)
@@ -492,11 +663,11 @@ func (s *Server) dirHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Vary", "Accept")
 
 	if acceptsHTML(r.Header) {
-		s.writeDirHTMLResponse(w, r, dirToken, entries, page, limit, totalFiles, totalPages)
+		s.writeDirHTMLResponse(w, r, dirToken, rootSubdirs, entries, page, limit, totalFiles, totalPages)
 		return
 	}
 
-	writeDirTextResponse(w, entries, page, limit, totalFiles, totalPages)
+	writeDirTextResponse(w, rootSubdirs, entries, page, limit, totalFiles, totalPages)
 }
 
 func (s *Server) checkDirLimits(w http.ResponseWriter, r *http.Request, dirToken string) (dirIndex, bool) {

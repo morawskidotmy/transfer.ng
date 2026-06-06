@@ -59,7 +59,9 @@ func (s *suiteDirectory) TestSingleUploadCreatesDirectory(c *C) {
 }
 
 // TestAddFileToDirectory verifies files can be added to an existing directory
-// using the upload token, and rejected without/with a wrong token.
+// using the upload token, and rejected with a wrong token. Without an upload
+// token, PUT /{token}/{filename} falls through to putHandler and creates a new
+// directory at that path.
 func (s *suiteDirectory) TestAddFileToDirectory(c *C) {
 	req := httptest.NewRequest("PUT", "http://example.com/one.txt", strings.NewReader("one"))
 	w := s.do(req)
@@ -69,12 +71,15 @@ func (s *suiteDirectory) TestAddFileToDirectory(c *C) {
 	uploadToken := w.Header().Get("X-Upload-Token")
 	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
 
-	// Missing token -> 401
+	// Without X-Upload-Token, the request creates a brand new directory
+	// at path "{dirToken}/two.txt" rather than failing with 401.
 	req = httptest.NewRequest("PUT", "http://example.com/"+dirToken+"/two.txt", strings.NewReader("two"))
-	c.Assert(s.do(req).Code, Equals, http.StatusUnauthorized)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Header().Get("X-Url-Directory"), Not(Equals), dirURL)
 
 	// Wrong token -> 403
-	req = httptest.NewRequest("PUT", "http://example.com/"+dirToken+"/two.txt", strings.NewReader("two"))
+	req = httptest.NewRequest("PUT", "http://example.com/"+dirToken+"/three.txt", strings.NewReader("three"))
 	req.Header.Set("X-Upload-Token", "wrong")
 	c.Assert(s.do(req).Code, Equals, http.StatusForbidden)
 
@@ -380,4 +385,123 @@ func (s *suiteDirectory) TestDirectoryFileCountLimit(c *C) {
 	req.Header.Set("X-Upload-Token", uploadToken)
 	w = do(req)
 	c.Assert(w.Code, Equals, http.StatusRequestEntityTooLarge)
+}
+
+// TestUploadToSubdirectoryCreatesNewDirectory verifies that PUT to a
+// subdirectory path (e.g. /subdir/file.txt) without X-Upload-Token creates a
+// new directory and stores the file at subdir/file.txt inside it.
+func (s *suiteDirectory) TestUploadToSubdirectoryCreatesNewDirectory(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/subdir/file.txt", strings.NewReader("content"))
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirURL := w.Header().Get("X-Url-Directory")
+	uploadToken := w.Header().Get("X-Upload-Token")
+	c.Assert(uploadToken, Not(Equals), "")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	// Root directory listing should contain the subdirectory
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(strings.Contains(w.Body.String(), "subdir/"), Equals, true)
+
+	// Subdirectory listing should contain the file
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/subdir/", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(strings.Contains(w.Body.String(), "file.txt"), Equals, true)
+
+	// Downloading the file via the subdirectory path should return the content
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/subdir/file.txt", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Body.String(), Equals, "content")
+}
+
+// TestDownloadFromSubdirectoryPath verifies that a file uploaded with a
+// subdirectory path can be downloaded using the full nested URL.
+func (s *suiteDirectory) TestDownloadFromSubdirectoryPath(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/funyguy/harvest/file.txt", strings.NewReader("deep"))
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirURL := w.Header().Get("X-Url-Directory")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/funyguy/harvest/file.txt", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Body.String(), Equals, "deep")
+}
+
+// TestAddToSubdirectoryInExistingDirectory verifies that files with
+// subdirectory paths can be added to an existing directory using the
+// X-Upload-Token header.
+func (s *suiteDirectory) TestAddToSubdirectoryInExistingDirectory(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/top.txt", strings.NewReader("top"))
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirURL := w.Header().Get("X-Url-Directory")
+	uploadToken := w.Header().Get("X-Upload-Token")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	req = httptest.NewRequest("PUT", "http://example.com/"+dirToken+"/sub/deep.txt", strings.NewReader("nested"))
+	req.Header.Set("X-Upload-Token", uploadToken)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	// Root directory should contain top.txt and sub/
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(strings.Contains(w.Body.String(), "top.txt"), Equals, true)
+	c.Assert(strings.Contains(w.Body.String(), "sub/"), Equals, true)
+
+	// Subdirectory should contain deep.txt
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/sub/", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(strings.Contains(w.Body.String(), "deep.txt"), Equals, true)
+
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/sub/deep.txt", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Body.String(), Equals, "nested")
+}
+
+// TestSubdirectoryFilenameSanitization verifies that unsafe characters in
+// subdirectory paths are sanitized properly.
+func (s *suiteDirectory) TestSubdirectoryFilenameSanitization(c *C) {
+	// Upload a file using a subdirectory path containing characters that
+	// sanitizePath strips (leading dots in path components are removed).
+	req := httptest.NewRequest("PUT", "http://example.com/foo/.hidden/file.txt", strings.NewReader("safe"))
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirURL := w.Header().Get("X-Url-Directory")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	// Leading-dot components are stripped by sanitizePath, so the stored
+	// path becomes "foo/hidden/file.txt" (hidden segment removed).
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/foo/hidden/file.txt", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Body.String(), Equals, "safe")
+}
+
+// TestArchiveRouteMatches verifies that the zip/tar archive routes match
+// paths correctly (the pattern must not contain literal parentheses).
+func (s *suiteDirectory) TestArchiveRouteMatches(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/archive-test.txt", strings.NewReader("arch"))
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	dirURL := w.Header().Get("X-Url-Directory")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/archive-test.txt.zip", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Header().Get("Content-Type"), Equals, "application/zip")
 }

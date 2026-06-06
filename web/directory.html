@@ -71,6 +71,48 @@
       color: var(--discord-white);
       padding: 5px 10px;
     }
+    .breadcrumbs {
+      margin-bottom: 20px;
+      padding: 10px;
+      background: #2c2f33;
+      border: 1px solid #36393f;
+    }
+    .breadcrumbs a {
+      color: var(--discord-blue);
+      text-decoration: none;
+    }
+    .breadcrumbs a:hover {
+      text-decoration: underline;
+    }
+    .breadcrumbs .separator {
+      color: var(--discord-steel);
+      margin: 0 8px;
+    }
+    .breadcrumbs .current {
+      color: var(--discord-white);
+    }
+    ul.subdirs {
+      list-style: none;
+      margin-bottom: 20px;
+    }
+    ul.subdirs li {
+      padding: 8px 0;
+      border-bottom: 1px solid #36393f;
+    }
+    ul.subdirs li a {
+      color: var(--discord-blue);
+      text-decoration: none;
+      font-weight: bold;
+    }
+    ul.subdirs li a:hover {
+      text-decoration: underline;
+    }
+    .section-label {
+      color: var(--discord-steel);
+      font-size: 0.9em;
+      margin-bottom: 10px;
+      text-transform: uppercase;
+    }
   </style>
 </head>
 <body>
@@ -79,6 +121,25 @@
       <div class="title">[ DIRECTORY ]</div>
       <div class="subtitle">{{.Token}}</div>
     </div>
+
+    {{if .Breadcrumbs}}
+    <div class="breadcrumbs">
+      <a href="/{{.Token}}/">root</a>
+      {{range .Breadcrumbs}}
+      <span class="separator">/</span>
+      <a href="{{.URL}}">{{.Name}}</a>
+      {{end}}
+    </div>
+    {{end}}
+
+    {{if .Subdirs}}
+    <div class="section-label">Subdirectories</div>
+    <ul class="subdirs">
+      {{range .Subdirs}}
+      <li><a href="{{.URL}}">{{.Name}}</a></li>
+      {{end}}
+    </ul>
+    {{end}}
 
     <div class="count">
       {{if .Limit}}
@@ -113,7 +174,7 @@
     </div>
     {{end}}
 
-    {{else}}
+    {{else if not .Subdirs}}
     <div class="empty">This directory is empty.</div>
     {{end}}
   </div>
