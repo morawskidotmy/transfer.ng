@@ -53,7 +53,7 @@ func TestNew(t *testing.T) {
 	if cmd.App == nil {
 		t.Fatal("New().App is nil")
 	}
-	if cmd.App.Name != "transfer.ng" {
-		t.Errorf("expected app name 'transfer.ng', got %q", cmd.App.Name)
+	if cmd.Name != "transfer.ng" {
+		t.Errorf("expected app name 'transfer.ng', got %q", cmd.Name)
 	}
 }

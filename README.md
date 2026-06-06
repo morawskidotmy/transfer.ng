@@ -287,30 +287,61 @@ transfer() {
         echo "Usage: transfer <file|directory> [file2 ...]"
         return 1
     fi
+
+    local host="${TRANSFER_HOST:-https://transfer.morawski.my}"
+
+    # Create an empty directory on the server
     local tmpdir=$(mktemp -d)
-    curl --silent --show-error -D "$tmpdir/headers" -o "$tmpdir/body" -X POST "https://transfer.morawski.my/dir"
-    local dir_url=$(grep -i '^X-Url-Directory:' "$tmpdir/headers" | sed 's/^[^:]*: *//')
-    local upload_token=$(sed -n 's/^Upload-Token: //p' "$tmpdir/body")
+    curl --silent --show-error -D "$tmpdir/headers" -o /dev/null \
+        -X POST "$host/dir" || { rm -rf "$tmpdir"; echo "Failed to create directory"; return 1; }
+    local dir_url=$(grep -i '^X-Url-Directory:' "$tmpdir/headers" | sed 's/^[^:]*: *//' | tr -d '\r')
+    local upload_token=$(grep -i '^X-Upload-Token:' "$tmpdir/headers" | sed 's/^[^:]*: *//' | tr -d '\r')
     rm -rf "$tmpdir"
     if [ -z "$dir_url" ] || [ -z "$upload_token" ]; then
         echo "Failed to create directory"
         return 1
     fi
-    local arg f
+
+    # Collect all files (recursing into directories) and upload in parallel.
+    # Subdirectory paths are preserved by find -print0 and reused as the
+    # remote path: ${dir_url}${relpath}.
+    local files=()
+    local arg
     for arg in "$@"; do
         if [ -d "$arg" ]; then
-            while read -r f; do
-                curl --silent --show-error -H "X-Upload-Token: $upload_token" \
-                    --upload-file "$f" "${dir_url}$(basename "$f")" >/dev/null \
-                    && echo "Uploaded: $(basename "$f")" &
-            done < <(find "$arg" -type f)
-            wait
+            while IFS= read -r -d '' f; do
+                files+=("$f")
+            done < <(find "$arg" -type f -print0)
+        elif [ -f "$arg" ]; then
+            files+=("$arg")
         else
-            curl --silent --show-error -H "X-Upload-Token: $upload_token" \
-                --upload-file "$arg" "${dir_url}$(basename "$arg")" >/dev/null \
-                && echo "Uploaded: $(basename "$arg")"
+            echo "Skipping: $arg (not a file or directory)"
         fi
     done
+
+    if [ ${#files[@]} -eq 0 ]; then
+        echo "No files to upload"
+        return 1
+    fi
+
+    upload_one() {
+        local f="$1"
+        local rel="${f#./}"
+        local url="${dir_url}${rel}"
+        if curl --silent --show-error --fail \
+                -H "X-Upload-Token: $upload_token" \
+                --upload-file "$f" "$url" >/dev/null; then
+            echo "$url"
+        else
+            echo "FAILED: $f" >&2
+            return 1
+        fi
+    }
+    export -f upload_one
+    export upload_token dir_url
+
+    printf '%s\0' "${files[@]}" | xargs -0 -P 8 -I {} bash -c 'upload_one "$@"' _ {}
+
     echo "Directory: $dir_url"
 }
 ```
@@ -319,18 +350,18 @@ Usage:
 
 ```bash
 transfer hello.txt
-# Uploaded: hello.txt
+# https://transfer.morawski.my/abcd1234/hello.txt
 # Directory: https://transfer.morawski.my/abcd1234/
 
 transfer myfolder/
-# Uploaded: file1.txt
-# Uploaded: file2.txt
+# https://transfer.morawski.my/efgh5678/myfolder/file1.txt
+# https://transfer.morawski.my/efgh5678/myfolder/sub/file2.txt
 # Directory: https://transfer.morawski.my/efgh5678/
 
 transfer file1.txt file2.txt file3.txt
-# Uploaded: file1.txt
-# Uploaded: file2.txt
-# Uploaded: file3.txt
+# https://transfer.morawski.my/ijkl9012/file1.txt
+# https://transfer.morawski.my/ijkl9012/file2.txt
+# https://transfer.morawski.my/ijkl9012/file3.txt
 # Directory: https://transfer.morawski.my/ijkl9012/
 ```
 

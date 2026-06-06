@@ -739,15 +739,16 @@ func (s *Server) setupRoutes(r *mux.Router, staticHandler http.Handler) {
 	r.HandleFunc("/{filename:(?:favicon\\.ico|robots\\.txt|health\\.html)}", s.basicAuthHandler(http.HandlerFunc(s.putHandler))).Methods("PUT")
 	r.HandleFunc("/health.html", healthHandler).Methods("GET")
 	r.HandleFunc("/", s.viewHandler).Methods("GET")
-	r.HandleFunc("/({files:.*}).zip", s.zipHandler).Methods("GET")
-	r.HandleFunc("/({files:.*}).tar", s.tarHandler).Methods("GET")
-	r.HandleFunc("/({files:.*}).tar.gz", s.tarGzHandler).Methods("GET")
 
 	// Directory-level GET routes must come before catch-all file routes
 	r.HandleFunc("/{token}/.zip", s.dirZipHandler).Methods("GET")
 	r.HandleFunc("/{token}/.tar.gz", s.dirTarGzHandler).Methods("GET")
 	r.HandleFunc("/{token}/", s.dirHandler).Methods("GET")
 	r.HandleFunc("/{token}", s.dirHandler).Methods("GET")
+	r.HandleFunc("/{token}/{subpath:.+}/", s.subDirHandler).Methods("GET")
+	r.HandleFunc("/{files:.*}.zip", s.zipHandler).Methods("GET")
+	r.HandleFunc("/{files:.*}.tar", s.tarHandler).Methods("GET")
+	r.HandleFunc("/{files:.*}.tar.gz", s.tarGzHandler).Methods("GET")
 
 	// File routes with nested path support
 	r.HandleFunc("/{token}/{filename:.+}", s.headHandler).Methods("HEAD")
@@ -780,8 +781,17 @@ func (s *Server) setupRoutes(r *mux.Router, staticHandler http.Handler) {
 	r.HandleFunc("/{filename}/scan", s.scanHandler).Methods("PUT")
 	r.HandleFunc("/put/{filename:.+}", s.basicAuthHandler(putHandlerFn)).Methods("PUT")
 	r.HandleFunc("/upload/{filename:.+}", s.basicAuthHandler(putHandlerFn)).Methods("PUT")
-	// putToDirHandler must be registered before the catch-all putHandler
-	r.HandleFunc("/{token}/{filename:.+}", s.basicAuthHandler(putToDirHandlerFn)).Methods("PUT")
+	// putToDirHandler must be registered before the catch-all putHandler. It only
+	// matches when the caller provides an X-Upload-Token header; without that
+	// header the request falls through to putHandler so that uploads to
+	// subdirectory paths (e.g. PUT /subdir/file.txt) create a new directory
+	// rather than failing with 401 Missing X-Upload-Token.
+	hasUploadToken := func(r *http.Request, _ *mux.RouteMatch) bool {
+		return r.Header.Get("X-Upload-Token") != ""
+	}
+	r.HandleFunc("/{token}/{filename:.+}", s.basicAuthHandler(putToDirHandlerFn)).
+		Methods("PUT").
+		MatcherFunc(hasUploadToken)
 	r.HandleFunc("/{filename:.+}", s.basicAuthHandler(putHandlerFn)).Methods("PUT")
 	r.HandleFunc("/dir", s.basicAuthHandler(http.HandlerFunc(s.createDirHandler))).Methods("POST")
 	r.HandleFunc("/", s.basicAuthHandler(postHandlerFn)).Methods("POST")
