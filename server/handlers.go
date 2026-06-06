@@ -28,6 +28,7 @@ import (
 	textTemplate "text/template"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
@@ -51,7 +52,11 @@ import (
 const getPathPart = "get"
 const defaultMaxArchiveFiles = 100
 const maxFilenameLength = 255
+const maxPathDepth = 10
+const maxPathLength = 1024
 const maxTokenLength = 200
+
+var idnaConverter = idna.New(idna.ValidateForRegistration())
 
 func stripPrefix(p string) string {
 	return strings.TrimPrefix(p, web.Prefix+"/")
@@ -275,7 +280,7 @@ func (s *Server) previewHandler(w http.ResponseWriter, r *http.Request) {
 
 	vars := mux.Vars(r)
 	token := vars["token"]
-	filename := vars["filename"]
+	filename := sanitizePath(vars["filename"])
 
 	if isBotUserAgent(r.Header.Get("User-Agent")) {
 		vars["action"] = "inline"
@@ -380,16 +385,6 @@ func (s *Server) viewHandler(w http.ResponseWriter, r *http.Request) {
 		purgeTime = formatDurationDays(s.purgeDays)
 	}
 
-	tokenA, err := token(s.randomTokenLength)
-	if err != nil {
-		s.respondError(w, http.StatusInternalServerError, "", "view: failed to generate token: %v", err)
-		return
-	}
-	tokenB, err := token(s.randomTokenLength)
-	if err != nil {
-		s.respondError(w, http.StatusInternalServerError, "", "view: failed to generate token: %v", err)
-		return
-	}
 	data := struct {
 		Hostname      string
 		WebAddress    string
@@ -408,8 +403,8 @@ func (s *Server) viewHandler(w http.ResponseWriter, r *http.Request) {
 		s.userVoiceKey,
 		purgeTime,
 		maxUploadSize,
-		tokenA,
-		tokenB,
+		s.sampleTokenA,
+		s.sampleTokenB,
 	}
 
 	w.Header().Set("Vary", "Accept")
@@ -438,10 +433,8 @@ func (s *Server) notFoundHandler(w http.ResponseWriter, _ *http.Request) {
 	http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 }
 
-func sanitize(fileName string) string {
+func sanitizePath(fileName string) string {
 	fileName = strings.ReplaceAll(fileName, "\\", "/")
-	fileName = strings.ReplaceAll(fileName, "..", "")
-	fileName = strings.ReplaceAll(fileName, ":", "")
 
 	t := transform.Chain(
 		norm.NFD,
@@ -453,41 +446,74 @@ func sanitize(fileName string) string {
 		runes.Remove(runes.In(unicode.Zl)),
 		runes.Remove(runes.In(unicode.Zp)),
 		norm.NFC)
-	newName, _, err := transform.String(t, fileName)
+	sanitized, _, err := transform.String(t, fileName)
 	if err != nil {
-		newName = path.Base(fileName)
-	} else {
-		newName = path.Base(newName)
+		sanitized = path.Base(fileName)
 	}
 
-	newName = strings.TrimLeft(newName, ".")
-
-	if len(newName) == 0 {
-		newName = "_"
+	parts := strings.Split(sanitized, "/")
+	var clean []string
+	for _, part := range parts {
+		if part == "" || part == ".." || part == "." {
+			continue
+		}
+		part = strings.TrimLeft(part, ".")
+		part = strings.ReplaceAll(part, ":", "")
+		if part == "" {
+			part = "_"
+		}
+		if utf8.RuneCountInString(part) > maxFilenameLength {
+			part = string([]rune(part)[:maxFilenameLength])
+		}
+		if reservedFilenames[part] {
+			part = "_"
+		}
+		clean = append(clean, part)
 	}
 
-	if len(newName) > maxFilenameLength {
-		newName = newName[:maxFilenameLength]
+	if len(clean) == 0 {
+		return "_"
+	}
+	if len(clean) > maxPathDepth {
+		clean = clean[:maxPathDepth]
 	}
 
-	return newName
+	result := strings.Join(clean, "/")
+	if len(result) > maxPathLength {
+		for len(result) > maxPathLength && len(clean) > 1 {
+			clean = clean[1:]
+			result = strings.Join(clean, "/")
+		}
+	}
+	return result
+}
+
+func escapePathForURL(filename string) string {
+	parts := strings.Split(filename, "/")
+	escaped := make([]string, len(parts))
+	for i, p := range parts {
+		escaped[i] = url.PathEscape(p)
+	}
+	return strings.Join(escaped, "/")
 }
 
 func validateTokenAndFilename(token, filename string) error {
 	if len(token) > maxTokenLength {
 		return fmt.Errorf("token too long")
 	}
-	if len(filename) > maxFilenameLength {
+	if len(filename) > maxPathLength {
 		return fmt.Errorf("filename too long")
 	}
-	if reservedFilenames[filename] {
-		return fmt.Errorf("filename is reserved")
+	for _, part := range strings.Split(filename, "/") {
+		if reservedFilenames[part] {
+			return fmt.Errorf("filename component is reserved")
+		}
 	}
 	return nil
 }
 
 func (s *Server) postHandler(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseMultipartForm(_24K); nil != err {
+	if err := r.ParseMultipartForm(multipartMemLimit); nil != err {
 		s.logger.Printf("%s", err.Error())
 		http.Error(w, "Error occurred copying to output stream", http.StatusInternalServerError)
 		return
@@ -506,7 +532,6 @@ func (s *Server) postHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 
 	var responseBody strings.Builder
-	responseBody.WriteString("Directory: " + s.directoryURL(r, dirToken) + "\n")
 	responseBody.WriteString("Upload-Token: " + uploadToken + "\n")
 	responseBody.WriteString("\n")
 
@@ -525,7 +550,7 @@ func (s *Server) postHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) processUploadFile(w http.ResponseWriter, r *http.Request, token string, fHeader *multipart.FileHeader, responseBody *strings.Builder) bool {
-	filename := sanitize(fHeader.Filename)
+	filename := sanitizePath(fHeader.Filename)
 
 	if reservedFilenames[filename] {
 		s.logger.Printf("upload: rejected reserved filename: %s", filename)
@@ -650,7 +675,7 @@ func (s *Server) saveFileWithMetadata(w http.ResponseWriter, r *http.Request, up
 }
 
 func (s *Server) addResponseURL(w http.ResponseWriter, r *http.Request, uploadToken, filename string, responseBody *strings.Builder) bool {
-	escapedFilename := url.PathEscape(filename)
+	escapedPath := escapePathForURL(filename)
 	storedMeta, err := s.checkMetadata(r.Context(), uploadToken, filename, false)
 	if err != nil {
 		s.logger.Printf("addResponseURL: %v", err)
@@ -658,8 +683,11 @@ func (s *Server) addResponseURL(w http.ResponseWriter, r *http.Request, uploadTo
 		return false
 	}
 
-	relativeURL, _ := url.Parse(path.Join(s.proxyPath, uploadToken, escapedFilename))
-	deleteURL, _ := url.Parse(path.Join(s.proxyPath, uploadToken, escapedFilename, storedMeta.DeletionToken))
+	relativeURL, _ := url.Parse(path.Join(s.proxyPath, uploadToken, escapedPath))
+	deleteURL, _ := url.Parse(path.Join(s.proxyPath, uploadToken, escapedPath))
+	q := deleteURL.Query()
+	q.Set("delete", storedMeta.DeletionToken)
+	deleteURL.RawQuery = q.Encode()
 	w.Header().Add("X-Url-Delete", resolveURL(r, deleteURL, s.proxyPort))
 	responseBody.WriteString(getURL(r, s.proxyPort).ResolveReference(relativeURL).String())
 	responseBody.WriteString("\n")
@@ -711,13 +739,13 @@ func metadataForRequest(contentType string, contentLength int64, randomTokenLeng
 	}
 
 	if v := r.Header.Get("Max-Downloads"); v != "" {
-		if parsed, err := strconv.Atoi(v); err == nil {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed >= 0 {
 			metadata.MaxDownloads = parsed
 		}
 	}
 
 	if v := r.Header.Get("Max-Days"); v != "" {
-		if parsed, err := strconv.Atoi(v); err == nil {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 && parsed <= 3650 {
 			metadata.MaxDate = time.Now().Add(time.Hour * 24 * time.Duration(parsed))
 		}
 	}
@@ -735,7 +763,7 @@ func metadataForRequest(contentType string, contentLength int64, randomTokenLeng
 
 func (s *Server) putHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	filename := sanitize(vars["filename"])
+	filename := sanitizePath(vars["filename"])
 
 	if reservedFilenames[filename] {
 		s.logger.Printf("put: rejected reserved filename: %s", filename)
@@ -846,12 +874,6 @@ func (s *Server) validateUploadSize(w http.ResponseWriter, contentLength int64) 
 		return false
 	}
 
-	if contentLength == 0 {
-		s.logger.Print("Empty content-length")
-		http.Error(w, "Could not upload empty file", http.StatusBadRequest)
-		return false
-	}
-
 	return true
 }
 
@@ -944,9 +966,12 @@ func (s *Server) writePutResponse(w http.ResponseWriter, r *http.Request, putTok
 	}
 
 	w.Header().Set("Content-Type", "text/plain")
-	escapedFilename := url.PathEscape(filename)
-	relativeURL, _ := url.Parse(path.Join(s.proxyPath, putToken, escapedFilename))
-	deleteURL, _ := url.Parse(path.Join(s.proxyPath, putToken, escapedFilename, storedMeta.DeletionToken))
+	escapedPath := escapePathForURL(filename)
+	relativeURL, _ := url.Parse(path.Join(s.proxyPath, putToken, escapedPath))
+	deleteURL, _ := url.Parse(path.Join(s.proxyPath, putToken, escapedPath))
+	q := deleteURL.Query()
+	q.Set("delete", storedMeta.DeletionToken)
+	deleteURL.RawQuery = q.Encode()
 
 	w.Header().Set("X-Url-Delete", resolveURL(r, deleteURL, s.proxyPort))
 	s.writeDirHeaders(w, r, putToken, uploadToken)
@@ -972,8 +997,8 @@ func resolveKey(key, proxyPath string) string {
 }
 
 func resolveWebAddress(r *http.Request, proxyPath string, proxyPort string) string {
-	rUrl := getURL(r, proxyPort)
-	resolved := rUrl.ResolveReference(rUrl)
+	rURL := getURL(r, proxyPort)
+	resolved := rURL.ResolveReference(rURL)
 
 	if len(proxyPath) == 0 {
 		return fmt.Sprintf("%s://%s/", resolved.Scheme, resolved.Host)
@@ -1012,9 +1037,7 @@ func getURL(r *http.Request, proxyPort string) *url.URL {
 		port = ""
 	}
 
-	p := idna.New(idna.ValidateForRegistration())
-	var hostFromPunycode string
-	hostFromPunycode, err = p.ToUnicode(host)
+	hostFromPunycode, err := idnaConverter.ToUnicode(host)
 	if err == nil {
 		host = hostFromPunycode
 	}
@@ -1060,9 +1083,9 @@ func (s *Server) lock(token, filename string) {
 func (s *Server) unlock(token, filename string) {
 	key := path.Join(token, filename)
 
-	lock, _ := s.locks.LoadOrStore(key, &sync.Mutex{})
-
-	lock.(*sync.Mutex).Unlock()
+	if lock, ok := s.locks.Load(key); ok {
+		lock.(*sync.Mutex).Unlock()
+	}
 }
 
 func (s *Server) checkMetadata(ctx context.Context, token, filename string, increaseDownload bool) (metadata, error) {
@@ -1148,15 +1171,18 @@ func (s *Server) deleteHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 
 	token := vars["token"]
-	filename := vars["filename"]
+	filename := sanitizePath(vars["filename"])
 	deletionToken := vars["deletionToken"]
 
+	if deletionToken == "" {
+		deletionToken = r.URL.Query().Get("delete")
+	}
 	if deletionToken == "" {
 		deletionToken = r.Header.Get("X-Deletion-Token")
 	}
 
 	if deletionToken == "" {
-		s.respondError(w, http.StatusNotFound, "", "delete: missing deletion token")
+		s.respondError(w, http.StatusBadRequest, "Missing deletion token", "delete: missing deletion token")
 		return
 	}
 
@@ -1203,9 +1229,12 @@ func (s *Server) parseArchiveFiles(filesSpec string) ([]archiveFileSpec, error) 
 		if len(parts) != 2 {
 			continue
 		}
+		if err := validateTokenAndFilename(parts[0], parts[1]); err != nil {
+			continue
+		}
 		specs = append(specs, archiveFileSpec{
 			token:    parts[0],
-			filename: sanitize(parts[1]),
+			filename: sanitizePath(parts[1]),
 		})
 	}
 	return specs, nil
@@ -1383,7 +1412,7 @@ func (s *Server) headHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 
 	token := vars["token"]
-	filename := vars["filename"]
+	filename := sanitizePath(vars["filename"])
 
 	if err := validateTokenAndFilename(token, filename); err != nil {
 		s.respondError(w, http.StatusBadRequest, err.Error(), "")
@@ -1427,7 +1456,7 @@ func (s *Server) getHandler(w http.ResponseWriter, r *http.Request) {
 
 	action := vars["action"]
 	token := vars["token"]
-	filename := vars["filename"]
+	filename := sanitizePath(vars["filename"])
 
 	if err := validateTokenAndFilename(token, filename); err != nil {
 		s.respondError(w, http.StatusBadRequest, err.Error(), "")
@@ -1522,7 +1551,7 @@ func (s *Server) getDisposition(action string) string {
 }
 
 func (s *Server) setCommonHeaders(w http.ResponseWriter, filename, disposition, remainingDownloads, remainingDays string) {
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`%s; filename="%s"`, disposition, filename))
+	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": filename}))
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Remaining-Downloads", remainingDownloads)

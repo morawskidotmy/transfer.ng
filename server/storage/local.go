@@ -18,6 +18,7 @@ type LocalStorage struct {
 	logger  *log.Logger
 }
 
+// NewLocalStorage creates a local filesystem storage backend rooted at basedir.
 func NewLocalStorage(basedir string, logger *log.Logger) (*LocalStorage, error) {
 	return &LocalStorage{basedir: basedir, logger: logger}, nil
 }
@@ -26,19 +27,27 @@ func (s *LocalStorage) buildPath(token, filename string) (string, error) {
 	if strings.ContainsAny(token, "/\\") || strings.Contains(token, "..") {
 		return "", fmt.Errorf("invalid token")
 	}
-	if strings.ContainsAny(filename, "/\\") || strings.Contains(filename, "..") {
+	// Allow forward slashes in filename for nested paths, but reject backslashes
+	// and path traversal sequences as defense-in-depth.
+	if strings.ContainsAny(filename, "\\") || strings.Contains(filename, "..") {
 		return "", fmt.Errorf("invalid filename")
 	}
-	if len(token) > 200 || len(filename) > 200 {
+	if strings.Contains(filename, "//") {
+		return "", fmt.Errorf("invalid filename: empty path component")
+	}
+	if strings.HasPrefix(filename, "/") {
+		return "", fmt.Errorf("invalid filename: absolute path")
+	}
+	if len(token) > 200 || len(filename) > 1024 {
 		return "", fmt.Errorf("token or filename too long")
 	}
 
-	path := filepath.Join(s.basedir, token, filename)
-	cleanBase := filepath.Clean(s.basedir) + string(os.PathSeparator)
-	if !strings.HasPrefix(filepath.Clean(path)+string(os.PathSeparator), cleanBase) {
-		return "", fmt.Errorf("path escapes basedir")
+	result := filepath.Join(s.basedir, token, filename)
+	tokenDir := filepath.Clean(filepath.Join(s.basedir, token)) + string(os.PathSeparator)
+	if !strings.HasPrefix(filepath.Clean(result), tokenDir) {
+		return "", fmt.Errorf("path escapes token directory")
 	}
-	return path, nil
+	return result, nil
 }
 
 // Type returns the storage type
@@ -46,6 +55,7 @@ func (s *LocalStorage) Type() string {
 	return "local"
 }
 
+// Head returns the content length of a file without reading its body.
 func (s *LocalStorage) Head(_ context.Context, token string, filename string) (contentLength uint64, err error) {
 	path, err := s.buildPath(token, filename)
 	if err != nil {
@@ -60,6 +70,7 @@ func (s *LocalStorage) Head(_ context.Context, token string, filename string) (c
 	return uint64(fi.Size()), nil
 }
 
+// Get retrieves a file from local storage, optionally with a byte range.
 func (s *LocalStorage) Get(_ context.Context, token string, filename string, rng *Range) (reader io.ReadCloser, contentLength uint64, err error) {
 	path, err := s.buildPath(token, filename)
 	if err != nil {
@@ -89,6 +100,7 @@ func (s *LocalStorage) Get(_ context.Context, token string, filename string, rng
 	return file, contentLength, nil
 }
 
+// Delete removes a file and its metadata from local storage.
 func (s *LocalStorage) Delete(_ context.Context, token string, filename string) error {
 	path, err := s.buildPath(token, filename)
 	if err != nil {
@@ -103,6 +115,7 @@ func (s *LocalStorage) Delete(_ context.Context, token string, filename string) 
 	return os.Remove(path)
 }
 
+// Purge removes files older than the specified duration from local storage.
 func (s *LocalStorage) Purge(_ context.Context, days time.Duration) (err error) {
 	err = filepath.Walk(s.basedir,
 		func(path string, info os.FileInfo, walkErr error) error {
@@ -135,6 +148,7 @@ func (s *LocalStorage) IsNotExist(err error) bool {
 	return os.IsNotExist(err)
 }
 
+// Put stores a file in local storage at the given token/filename path.
 func (s *LocalStorage) Put(_ context.Context, token string, filename string, reader io.Reader, _ string, _ uint64) error {
 	fullPath, err := s.buildPath(token, filename)
 	if err != nil {
@@ -160,4 +174,5 @@ func (s *LocalStorage) Put(_ context.Context, token string, filename string, rea
 	return nil
 }
 
+// IsRangeSupported returns true because local storage supports HTTP Range requests.
 func (s *LocalStorage) IsRangeSupported() bool { return true }

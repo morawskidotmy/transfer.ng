@@ -12,7 +12,7 @@ import (
 func (s *Server) virusTotalHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 
-	filename := sanitize(vars["filename"])
+	filename := sanitizePath(vars["filename"])
 
 	contentLength := r.ContentLength
 	contentType := r.Header.Get("Content-Type")

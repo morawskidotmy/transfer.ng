@@ -1,2 +1,37 @@
-allow empty file upload
+# P5 — Architecture Refactors (deferred)
 
+All original todos (1-7) are complete. These are larger refactors for future work:
+
+## 5.1 Split handlers.go (1742 lines)
+Break into focused packages:
+- `server/upload.go` — putHandler, postHandler, putToDirHandler, doPutUpload, processPutUpload, processUploadFile, saveFileWithMetadata, saveMetadata, validateUploadSize, bufferFileToTemp, copyAndValidateFile
+- `server/download.go` — getHandler, headHandler, previewHandler, handleDecryptionAndCompression, setCommonHeaders, getDisposition, checkMetadata
+- `server/archive.go` — zipHandler, tarGzHandler, tarHandler, dirZipHandler, dirTarGzHandler, parseArchiveFiles, fetchFileForArchive, archiveFileSpec
+- `server/encryption.go` — encrypt, decrypt, attachEncryptionReader, attachDecryptionReader, passwordKey
+- `server/middleware.go` — basicAuthHandler, securityHeadersHandler, LoveHandler, healthHandler, notFoundHandler
+- `server/url.go` — resolveURL, resolveKey, resolveWebAddress, getURL, cloneURL, directoryURL
+
+## 5.2 Extract Server struct concerns
+Split the 30+ field Server struct into composable sub-structs:
+- `AuthConfig` — authUser, authPass, htpasswdFile, authIPFilterOptions
+- `TLSConfig` — Certificate, CertificateKey, LetsEncryptHosts, LetsEncryptCache, TLSListenerOnly
+- `TemplateRenderer` — htmlTemplates, textTemplates, webPath, htmlTemplatesMutex, textTemplatesMutex
+- `RateLimitConfig` — rateLimitRequests, rateLimitUploads
+- `StorageConfig` — maxUploadSize, compressionThreshold, maxArchiveFiles, maxDirSize, maxDirFiles
+
+## 5.3 Unify archive handlers
+Extract `writeArchive(w, r, specs, format)` to replace the 5 nearly-identical archive handlers (zipHandler, tarGzHandler, tarHandler, dirZipHandler, dirTarGzHandler).
+
+## 5.4 Unify metadata saving
+Merge saveFileWithMetadata, processPutUpload, and saveMetadata into a single `storeUpload()` function parameterized by upload source (POST multipart vs PUT).
+
+## 5.5 Middleware chain builder
+Replace deeply nested middleware calls:
+```go
+h := securityHeadersHandler(handlers.PanicHandler(ipFilterHandler(...)))
+```
+With a chain builder:
+```go
+chain := middleware.New(securityHeaders, panicHandler, ipFilter, logHandler, loveHandler, cors)
+h := chain.Then(handler)
+```

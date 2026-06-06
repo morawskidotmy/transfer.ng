@@ -10,6 +10,7 @@ import (
 	"time"
 )
 
+// Range represents an HTTP byte-range request for partial content retrieval.
 type Range struct {
 	Start        uint64
 	Limit        uint64
@@ -42,19 +43,20 @@ func (r *Range) AcceptLength(contentLength uint64) (newContentLength uint64) {
 	return
 }
 
+// SetContentRange sets the raw Content-Range value for this range request.
 func (r *Range) SetContentRange(cr string) {
 	r.contentRange = cr
 }
 
-// Returns accepted Content-Range header. If range wasn't accepted empty string is returned
+// ContentRange returns the Content-Range header value for the accepted range.
 func (r *Range) ContentRange() string {
 	return r.contentRange
 }
 
 var rexp = regexp.MustCompile(`^bytes=([0-9]+)-([0-9]*)$`)
 
-// Parses HTTP Range header and returns struct on success
-// only bytes=start-finish supported
+// ParseRange parses an HTTP Range header string and returns a Range on success.
+// Only the bytes=start-finish form is supported.
 func ParseRange(rng string) *Range {
 	if rng == "" {
 		return nil
@@ -108,6 +110,7 @@ type Storage interface {
 	Type() string
 }
 
+// CloseCheck safely closes an io.Closer, logging any errors.
 func CloseCheck(c io.Closer) {
 	if c == nil {
 		return

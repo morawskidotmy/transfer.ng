@@ -172,8 +172,18 @@ func (s *GDrive) Type() string {
 	return "gdrive"
 }
 
+func (s *GDrive) rejectNestedPaths(filename string) error {
+	if strings.Contains(filename, "/") {
+		return fmt.Errorf("gdrive: nested paths not supported")
+	}
+	return nil
+}
+
 // Head retrieves content length of a file from storage
 func (s *GDrive) Head(ctx context.Context, token string, filename string) (contentLength uint64, err error) {
+	if err = s.rejectNestedPaths(filename); err != nil {
+		return
+	}
 	var fileID string
 	fileID, err = s.findID(filename, token)
 	if err != nil {
@@ -192,6 +202,9 @@ func (s *GDrive) Head(ctx context.Context, token string, filename string) (conte
 
 // Get retrieves a file from storage
 func (s *GDrive) Get(ctx context.Context, token string, filename string, rng *Range) (reader io.ReadCloser, contentLength uint64, err error) {
+	if err = s.rejectNestedPaths(filename); err != nil {
+		return
+	}
 	var fileID string
 	fileID, err = s.findID(filename, token)
 	if err != nil {
@@ -235,6 +248,9 @@ func (s *GDrive) Get(ctx context.Context, token string, filename string, rng *Ra
 
 // Delete removes a file from storage
 func (s *GDrive) Delete(ctx context.Context, token string, filename string) (err error) {
+	if err = s.rejectNestedPaths(filename); err != nil {
+		return
+	}
 	metadata, metaErr := s.findID(fmt.Sprintf("%s.metadata", filename), token)
 	if metaErr == nil {
 		if delErr := s.service.Files.Delete(metadata).Context(ctx).Do(); delErr != nil {
@@ -299,6 +315,9 @@ func (s *GDrive) IsNotExist(err error) bool {
 
 // Put saves a file on storage
 func (s *GDrive) Put(ctx context.Context, token string, filename string, reader io.Reader, contentType string, contentLength uint64) error {
+	if err := s.rejectNestedPaths(filename); err != nil {
+		return err
+	}
 	dirID, err := s.findID("", token)
 	if err != nil {
 		return err
@@ -335,6 +354,7 @@ func (s *GDrive) Put(ctx context.Context, token string, filename string, reader 
 	return nil
 }
 
+// IsRangeSupported returns true because Google Drive supports HTTP Range requests.
 func (s *GDrive) IsRangeSupported() bool { return true }
 
 // Retrieve a token, saves the token, then returns the generated client.

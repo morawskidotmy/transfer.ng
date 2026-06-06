@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/morawskidotmy/transfer.ng/server/storage"
 
@@ -17,6 +18,7 @@ import (
 	"google.golang.org/api/googleapi"
 )
 
+// Version is the current version of transfer.ng, set at build time via ldflags.
 var Version = "0.0.0"
 
 var sizeRe = regexp.MustCompile(`^(\d+(?:\.\d+)?)\s*([kmgt]?b?)$`)
@@ -234,6 +236,12 @@ var globalFlags = []cli.Flag{
 		EnvVars: []string{"RATE_LIMIT"},
 	},
 	&cli.IntFlag{
+		Name:    "rate-limit-uploads",
+		Usage:   "upload requests per minute",
+		Value:   0,
+		EnvVars: []string{"RATE_LIMIT_UPLOADS"},
+	},
+	&cli.IntFlag{
 		Name:    "purge-days",
 		Usage:   "number of days after uploads are purged automatically",
 		Value:   0,
@@ -274,6 +282,12 @@ var globalFlags = []cli.Flag{
 		Usage:   "clamav-host",
 		Value:   "",
 		EnvVars: []string{"CLAMAV_HOST"},
+	},
+	&cli.DurationFlag{
+		Name:    "clamav-timeout",
+		Usage:   "clamav scan timeout",
+		Value:   60 * time.Second,
+		EnvVars: []string{"CLAMAV_TIMEOUT"},
 	},
 	&cli.BoolFlag{
 		Name:    "perform-clamav-prescan",
@@ -406,6 +420,7 @@ func appAction(c *cli.Context, logger *log.Logger) error {
 	return nil
 }
 
+// New creates and configures the CLI application with all commands and flags.
 func New() *Cmd {
 	logger := log.New(os.Stdout, "[transfer.ng]", log.LstdFlags)
 
@@ -439,7 +454,7 @@ func New() *Cmd {
 
 func addBasicOptions(c *cli.Context, options *[]server.OptionFn, logger *log.Logger) {
 	addStringOption(c, options, "listener", server.Listener)
-	addStringOption(c, options, "cors-domains", server.CorsDomains)
+	addStringOption(c, options, "cors-domains", server.CORSDomains)
 	addStringOption(c, options, "profile-listener", server.ProfileListener)
 	addStringOption(c, options, "web-path", server.WebPath)
 	addStringOption(c, options, "proxy-path", server.ProxyPath)
@@ -453,6 +468,10 @@ func addBasicOptions(c *cli.Context, options *[]server.OptionFn, logger *log.Log
 	})
 	addStringOption(c, options, "virustotal-key", server.VirustotalKey)
 	addStringOption(c, options, "clamav-host", server.ClamavHost)
+
+	if v := c.Duration("clamav-timeout"); v > 0 {
+		*options = append(*options, server.ClamavTimeout(v))
+	}
 
 	if v := c.String("log"); v != "" {
 		*options = append(*options, server.LogFile(logger, v))
@@ -470,6 +489,10 @@ func addBasicOptions(c *cli.Context, options *[]server.OptionFn, logger *log.Log
 
 	if v := c.Int("rate-limit"); v > 0 {
 		*options = append(*options, server.RateLimit(v))
+	}
+
+	if v := c.Int("rate-limit-uploads"); v > 0 {
+		*options = append(*options, server.RateLimitUploads(v))
 	}
 
 	*options = append(*options, server.RandomTokenLength(c.Int("random-token-length")))
@@ -525,7 +548,10 @@ func addTLSOptions(c *cli.Context, options *[]server.OptionFn) {
 func addSecurityOptions(c *cli.Context, options *[]server.OptionFn) error {
 	purgeDays := c.Int("purge-days")
 	purgeInterval := c.Int("purge-interval")
-	if purgeDays > 0 && purgeInterval > 0 {
+	if purgeDays > 0 {
+		if purgeInterval <= 0 {
+			purgeInterval = 24
+		}
 		*options = append(*options, server.Purge(purgeDays, purgeInterval))
 	}
 

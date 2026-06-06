@@ -273,7 +273,7 @@ func (s *suiteDirectory) TestPostResponseBodyIncludesDirectoryInfo(c *C) {
 	c.Assert(w.Code, Equals, http.StatusOK)
 
 	respBody := w.Body.String()
-	c.Assert(strings.Contains(respBody, "Directory:"), Equals, true)
+	c.Assert(w.Header().Get("X-Url-Directory"), Not(Equals), "")
 	c.Assert(strings.Contains(respBody, "Upload-Token:"), Equals, true)
 }
 

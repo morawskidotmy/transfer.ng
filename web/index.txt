@@ -80,7 +80,7 @@ Accept-Ranges:         indicates byte range support
 
 DELETE FILE
 ===========
-curl -X DELETE {{.WebAddress}}TOKEN/filename/DELETION_TOKEN
+curl -X DELETE "{{.WebAddress}}TOKEN/filename?delete=DELETION_TOKEN"
 
 or using header:
 curl -X DELETE {{.WebAddress}}TOKEN/filename \

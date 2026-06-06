@@ -3,13 +3,18 @@ package server
 import (
 	"context"
 	"crypto/tls"
+
+	// embed is used to embed web assets into the binary at compile time.
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	htmlTemplate "html/template"
 	"log"
 	"mime"
 	"net/http"
+
+	// net/http/pprof registers profiling handlers on the default ServeMux.
 	_ "net/http/pprof"
 	"net/url"
 	"os"
@@ -30,13 +35,14 @@ import (
 	"github.com/tomasen/realip"
 	"golang.org/x/crypto/acme/autocert"
 
+	"io/fs"
+
 	"github.com/morawskidotmy/transfer.ng/server/storage"
 	web "github.com/morawskidotmy/transfer.ng/web"
-	"io/fs"
 )
 
-// parse request with maximum memory of _24Kilobits
-const _24K = (1 << 3) * 24
+// parse request with maximum memory of 192 bytes before spilling to disk
+const multipartMemLimit = 192
 
 // parse request with maximum memory of _5Megabytes
 const _5M = (1 << 20) * 5
@@ -48,6 +54,13 @@ type OptionFn func(*Server)
 func ClamavHost(s string) OptionFn {
 	return func(srvr *Server) {
 		srvr.ClamAVDaemonHost = s
+	}
+}
+
+// ClamavTimeout sets the timeout for ClamAV scans (default 60s).
+func ClamavTimeout(d time.Duration) OptionFn {
+	return func(srvr *Server) {
+		srvr.clamavTimeout = d
 	}
 }
 
@@ -73,12 +86,11 @@ func Listener(s string) OptionFn {
 
 }
 
-// CorsDomains sets CORS domains
-func CorsDomains(s string) OptionFn {
+// CORSDomains sets allowed CORS origins.
+func CORSDomains(s string) OptionFn {
 	return func(srvr *Server) {
-		srvr.CorsDomains = s
+		srvr.CORSDomains = s
 	}
-
 }
 
 // EmailContact sets email contact
@@ -194,6 +206,13 @@ func RateLimit(requests int) OptionFn {
 	}
 }
 
+// RateLimitUploads sets the rate limit for upload endpoints (PUT/POST).
+func RateLimitUploads(requests int) OptionFn {
+	return func(srvr *Server) {
+		srvr.rateLimitUploads = requests
+	}
+}
+
 // RandomTokenLength sets random token length
 func RandomTokenLength(length int) OptionFn {
 	return func(srvr *Server) {
@@ -201,30 +220,45 @@ func RandomTokenLength(length int) OptionFn {
 	}
 }
 
+// CompressionThreshold sets the minimum file size (bytes) above which uploads are zstd-compressed.
 func CompressionThreshold(bytes int64) OptionFn {
 	return func(srvr *Server) {
 		srvr.compressionThreshold = bytes
 	}
 }
 
+// MaxArchiveFiles sets the maximum number of files allowed in a single archive download.
 func MaxArchiveFiles(count int) OptionFn {
 	return func(srvr *Server) {
 		srvr.maxArchiveFiles = count
 	}
 }
 
+// MaxDirSize sets the maximum total size (bytes) allowed for a single directory.
 func MaxDirSize(size int64) OptionFn {
 	return func(srvr *Server) {
 		srvr.maxDirSize = size
 	}
 }
 
+// MaxDirFiles sets the maximum number of files allowed in a single directory.
 func MaxDirFiles(count int) OptionFn {
 	return func(srvr *Server) {
 		srvr.maxDirFiles = count
 	}
 }
 
+// Timeouts sets the HTTP server read, write, idle, and read-header timeouts.
+func Timeouts(readHeader, read, write, idle time.Duration) OptionFn {
+	return func(srvr *Server) {
+		srvr.readHeaderTimeout = readHeader
+		srvr.readTimeout = read
+		srvr.writeTimeout = write
+		srvr.idleTimeout = idle
+	}
+}
+
+// Purge sets the age (days) and interval (hours) for automatic file expiration and cleanup.
 func Purge(days, interval int) OptionFn {
 	return func(srvr *Server) {
 		srvr.purgeDays = time.Duration(days) * time.Hour * 24
@@ -256,7 +290,10 @@ func UseStorage(s storage.Storage) OptionFn {
 // UseLetsEncrypt set letsencrypt usage
 func UseLetsEncrypt(hosts []string) OptionFn {
 	return func(srvr *Server) {
-		cacheDir := "./cache/"
+		cacheDir := srvr.LetsEncryptCache
+		if cacheDir == "" {
+			cacheDir = "./cache/"
+		}
 
 		m := autocert.Manager{
 			Prompt: autocert.AcceptTOS,
@@ -356,6 +393,7 @@ type Server struct {
 
 	maxUploadSize     int64
 	rateLimitRequests int
+	rateLimitUploads  int
 
 	purgeDays     time.Duration
 	purgeInterval time.Duration
@@ -372,6 +410,7 @@ type Server struct {
 
 	VirusTotalKey        string
 	ClamAVDaemonHost     string
+	clamavTimeout        time.Duration
 	performClamavPrescan bool
 
 	tempPath string
@@ -385,7 +424,7 @@ type Server struct {
 
 	TLSListenerOnly bool
 
-	CorsDomains           string
+	CORSDomains           string
 	ListenerString        string
 	TLSListenerString     string
 	ProfileListenerString string
@@ -393,6 +432,9 @@ type Server struct {
 	Certificate string
 
 	LetsEncryptCache string
+
+	sampleTokenA string
+	sampleTokenB string
 
 	htmlTemplates      *htmlTemplate.Template
 	htmlTemplatesMutex sync.RWMutex
@@ -403,6 +445,11 @@ type Server struct {
 	maxArchiveFiles      int
 	maxDirSize           int64 // Maximum total size of files in a directory (0 = unlimited)
 	maxDirFiles          int   // Maximum number of files in a directory (0 = unlimited)
+
+	readHeaderTimeout time.Duration
+	readTimeout       time.Duration
+	writeTimeout      time.Duration
+	idleTimeout       time.Duration
 }
 
 // New is the factory fot Server
@@ -414,6 +461,17 @@ func New(options ...OptionFn) (*Server, error) {
 	for _, optionFn := range options {
 		optionFn(s)
 	}
+
+	tokenA, err := token(s.randomTokenLength)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate sample token: %w", err)
+	}
+	tokenB, err := token(s.randomTokenLength)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate sample token: %w", err)
+	}
+	s.sampleTokenA = tokenA
+	s.sampleTokenB = tokenB
 
 	return s, nil
 }
@@ -446,8 +504,8 @@ func (s *Server) startProfiler() bool {
 	return true
 }
 
-func (s *Server) createCorsHandler() func(http.Handler) http.Handler {
-	if len(s.CorsDomains) > 0 {
+func (s *Server) createCORSHandler() func(http.Handler) http.Handler {
+	if len(s.CORSDomains) > 0 {
 		return gorillaHandlers.CORS(
 			gorillaHandlers.AllowedHeaders([]string{
 				"Content-Type",
@@ -463,7 +521,7 @@ func (s *Server) createCorsHandler() func(http.Handler) http.Handler {
 				"Max-Days",
 				"Range",
 			}),
-			gorillaHandlers.AllowedOrigins(strings.Split(s.CorsDomains, ",")),
+			gorillaHandlers.AllowedOrigins(strings.Split(s.CORSDomains, ",")),
 			gorillaHandlers.AllowedMethods([]string{"GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS"}),
 		)
 	}
@@ -473,13 +531,29 @@ func (s *Server) createCorsHandler() func(http.Handler) http.Handler {
 }
 
 func (s *Server) createHTTPServer(addr string, h http.Handler) *http.Server {
+	readHeaderTimeout := s.readHeaderTimeout
+	if readHeaderTimeout == 0 {
+		readHeaderTimeout = 10 * time.Second
+	}
+	readTimeout := s.readTimeout
+	if readTimeout == 0 {
+		readTimeout = 5 * time.Minute
+	}
+	writeTimeout := s.writeTimeout
+	if writeTimeout == 0 {
+		writeTimeout = 10 * time.Minute
+	}
+	idleTimeout := s.idleTimeout
+	if idleTimeout == 0 {
+		idleTimeout = 2 * time.Minute
+	}
 	return &http.Server{
 		Addr:              addr,
 		Handler:           h,
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       5 * time.Minute,
-		WriteTimeout:      10 * time.Minute,
-		IdleTimeout:       2 * time.Minute,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
 	}
 }
 
@@ -530,6 +604,7 @@ func (s *Server) shutdownServers(servers []*http.Server) {
 	s.logger.Print("Server stopped.")
 }
 
+// Run starts the HTTP server(s) and blocks until a shutdown signal is received.
 func (s *Server) Run() {
 	listening := s.startProfiler()
 	var servers []*http.Server
@@ -554,7 +629,7 @@ func (s *Server) Run() {
 
 	s.logger.Printf("Transfer.sh server started.\nusing temp folder: %s\nusing storage provider: %s", s.tempPath, s.storage.Type())
 
-	cors := s.createCorsHandler()
+	cors := s.createCORSHandler()
 	h := securityHeadersHandler(
 		handlers.PanicHandler(
 			ipFilterHandler(
@@ -664,14 +739,17 @@ func (s *Server) setupRoutes(r *mux.Router, staticHandler http.Handler) {
 	r.HandleFunc("/({files:.*}).zip", s.zipHandler).Methods("GET")
 	r.HandleFunc("/({files:.*}).tar", s.tarHandler).Methods("GET")
 	r.HandleFunc("/({files:.*}).tar.gz", s.tarGzHandler).Methods("GET")
-	r.HandleFunc("/{token}/{filename}", s.headHandler).Methods("HEAD")
-	r.HandleFunc("/{action:(?:download|get|inline)}/{token}/{filename}", s.headHandler).Methods("HEAD")
-	r.HandleFunc("/{token}/{filename}", s.previewHandler).MatcherFunc(s.previewMatcher).Methods("GET")
 
+	// Directory-level GET routes must come before catch-all file routes
 	r.HandleFunc("/{token}/.zip", s.dirZipHandler).Methods("GET")
 	r.HandleFunc("/{token}/.tar.gz", s.dirTarGzHandler).Methods("GET")
 	r.HandleFunc("/{token}/", s.dirHandler).Methods("GET")
 	r.HandleFunc("/{token}", s.dirHandler).Methods("GET")
+
+	// File routes with nested path support
+	r.HandleFunc("/{token}/{filename:.+}", s.headHandler).Methods("HEAD")
+	r.HandleFunc("/{action:(?:download|get|inline)}/{token}/{filename:.+}", s.headHandler).Methods("HEAD")
+	r.HandleFunc("/{token}/{filename:.+}", s.previewHandler).MatcherFunc(s.previewMatcher).Methods("GET")
 
 	getHandlerFn := s.getHandler
 	if s.rateLimitRequests > 0 {
@@ -681,18 +759,31 @@ func (s *Server) setupRoutes(r *mux.Router, staticHandler http.Handler) {
 		getHandlerFn = ratelimit.Request(realIPKeyFn).Rate(s.rateLimitRequests, 60*time.Second).LimitBy(memory.New())(http.HandlerFunc(getHandlerFn)).ServeHTTP
 	}
 
-	r.HandleFunc("/{token}/{filename}", getHandlerFn).Methods("GET")
-	r.HandleFunc("/{action:(?:download|get|inline)}/{token}/{filename}", getHandlerFn).Methods("GET")
+	var putHandlerFn http.Handler = http.HandlerFunc(s.putHandler)
+	var putToDirHandlerFn http.Handler = http.HandlerFunc(s.putToDirHandler)
+	var postHandlerFn http.Handler = http.HandlerFunc(s.postHandler)
+	if s.rateLimitUploads > 0 {
+		realIPKeyFn := func(r *http.Request) string {
+			return realip.FromRequest(r)
+		}
+		putHandlerFn = ratelimit.Request(realIPKeyFn).Rate(s.rateLimitUploads, 60*time.Second).LimitBy(memory.New())(http.HandlerFunc(s.putHandler))
+		putToDirHandlerFn = ratelimit.Request(realIPKeyFn).Rate(s.rateLimitUploads, 60*time.Second).LimitBy(memory.New())(http.HandlerFunc(s.putToDirHandler))
+		postHandlerFn = ratelimit.Request(realIPKeyFn).Rate(s.rateLimitUploads, 60*time.Second).LimitBy(memory.New())(http.HandlerFunc(s.postHandler))
+	}
+
+	r.HandleFunc("/{token}/{filename:.+}", getHandlerFn).Methods("GET")
+	r.HandleFunc("/{action:(?:download|get|inline)}/{token}/{filename:.+}", getHandlerFn).Methods("GET")
 	r.HandleFunc("/{filename}/virustotal", s.virusTotalHandler).Methods("PUT")
 	r.HandleFunc("/{filename}/scan", s.scanHandler).Methods("PUT")
-	r.HandleFunc("/put/{filename}", s.basicAuthHandler(http.HandlerFunc(s.putHandler))).Methods("PUT")
-	r.HandleFunc("/upload/{filename}", s.basicAuthHandler(http.HandlerFunc(s.putHandler))).Methods("PUT")
-	r.HandleFunc("/{token}/{filename}", s.basicAuthHandler(http.HandlerFunc(s.putToDirHandler))).Methods("PUT")
-	r.HandleFunc("/{filename}", s.basicAuthHandler(http.HandlerFunc(s.putHandler))).Methods("PUT")
+	r.HandleFunc("/put/{filename:.+}", s.basicAuthHandler(putHandlerFn)).Methods("PUT")
+	r.HandleFunc("/upload/{filename:.+}", s.basicAuthHandler(putHandlerFn)).Methods("PUT")
+	// putToDirHandler must be registered before the catch-all putHandler
+	r.HandleFunc("/{token}/{filename:.+}", s.basicAuthHandler(putToDirHandlerFn)).Methods("PUT")
+	r.HandleFunc("/{filename:.+}", s.basicAuthHandler(putHandlerFn)).Methods("PUT")
 	r.HandleFunc("/dir", s.basicAuthHandler(http.HandlerFunc(s.createDirHandler))).Methods("POST")
-	r.HandleFunc("/", s.basicAuthHandler(http.HandlerFunc(s.postHandler))).Methods("POST")
-	r.HandleFunc("/{token}/{filename}/{deletionToken}", s.deleteHandler).Methods("DELETE")
-	r.HandleFunc("/{token}/{filename}", s.deleteHandler).Methods("DELETE")
+	r.HandleFunc("/", s.basicAuthHandler(postHandlerFn)).Methods("POST")
+	// Deletion token now passed via query param or X-Deletion-Token header
+	r.HandleFunc("/{token}/{filename:.+}", s.deleteHandler).Methods("DELETE")
 	r.HandleFunc("/{token}/", s.deleteDirHandler).Methods("DELETE")
 	r.NotFoundHandler = http.HandlerFunc(s.notFoundHandler)
 }

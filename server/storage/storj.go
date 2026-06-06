@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"time"
@@ -140,10 +141,13 @@ func (s *StorjStorage) Put(ctx context.Context, token string, filename string, r
 	}
 
 	n, err := io.Copy(writer, reader)
-	if err != nil || uint64(n) != contentLength {
-		//Ignoring the error to return the one that occurred first, but try to clean up.
+	if err != nil {
 		_ = writer.Abort()
 		return err
+	}
+	if uint64(n) != contentLength {
+		_ = writer.Abort()
+		return fmt.Errorf("short write: copied %d of %d bytes", n, contentLength)
 	}
 	err = writer.SetCustomMetadata(ctx, uplink.CustomMetadata{"content-type": contentType})
 	if err != nil {
@@ -156,6 +160,7 @@ func (s *StorjStorage) Put(ctx context.Context, token string, filename string, r
 	return err
 }
 
+// IsRangeSupported returns true because Storj supports HTTP Range requests.
 func (s *StorjStorage) IsRangeSupported() bool { return true }
 
 // IsNotExist indicates if a file doesn't exist on storage

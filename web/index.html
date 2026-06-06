@@ -235,7 +235,6 @@
           to add files to it (even from other machines):
         </div>
         <pre>curl -X POST {{.WebAddress}}dir
-# Directory:    {{.WebAddress}}TOKEN/
 # Upload-Token: SECRET</pre>
         <div class="description">
           Add files to that directory:
@@ -245,9 +244,9 @@
         <div class="description">
           Upload a whole folder at once:
         </div>
-        <pre>find ./myfolder -type f -exec \
+        <pre>cd ./myfolder && find . -type f | xargs -P 8 -I {} \
   curl -H "X-Upload-Token: SECRET" \
-  --upload-file {} {{.WebAddress}}TOKEN/ \;</pre>
+  --upload-file {} {{.WebAddress}}TOKEN/{}</pre>
         <div class="description">
           List the files in a directory:
         </div>

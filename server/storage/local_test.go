@@ -197,10 +197,10 @@ func TestLocalStorage_BuildPathSecurity(t *testing.T) {
 		{"token with slash", "abc/123", "file.txt", true},
 		{"token with backslash", "abc\\123", "file.txt", true},
 		{"token with dotdot", "abc..123", "file.txt", true},
-		{"filename with slash", "abc123", "path/file.txt", true},
+		{"filename with slash", "abc123", "path/file.txt", false},
 		{"filename with dotdot", "abc123", "../file.txt", true},
 		{"token too long", string(make([]byte, 201)), "file.txt", true},
-		{"filename too long", "abc123", string(make([]byte, 201)), true},
+		{"filename too long", "abc123", string(make([]byte, 1025)), true},
 	}
 
 	for _, tt := range tests {
