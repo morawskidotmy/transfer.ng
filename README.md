@@ -346,4 +346,4 @@ transfer file1.txt file2.txt file3.txt
 - **Stefan Benten** - Maintainer
 - **morawskidotmy** - transfer.ng fork with directory support
 
-Code released under the [MIT License](LICENSE).
+Code released under the [GNU AGPL-3.0](LICENSE), with upstream portions under [MIT](LICENSE.mit). See [NOTICE.md](NOTICE.md) for details.
