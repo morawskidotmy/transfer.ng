@@ -109,6 +109,11 @@ func (s *StorjStorage) Get(ctx context.Context, token string, filename string, r
 
 // Delete removes a file from storage
 func (s *StorjStorage) Delete(ctx context.Context, token string, filename string) (err error) {
+	metadataKey := storj.JoinPaths(token, fmt.Sprintf("%s.metadata", filename))
+	if _, metaErr := s.project.DeleteObject(fpath.WithTempData(ctx, "", true), s.bucket.Name, metadataKey); metaErr != nil && !s.IsNotExist(metaErr) {
+		return metaErr
+	}
+
 	key := storj.JoinPaths(token, filename)
 
 	s.logger.Printf("Deleting file %s from Storj Bucket", filename)

@@ -6,7 +6,16 @@ Host:      {{.Hostname}}
 Address:   {{.WebAddress}}
 {{if .MaxUploadSize}}Max Upload: {{.MaxUploadSize}}{{end}}
 {{if .PurgeTime}}Purge Time: {{.PurgeTime}}{{end}}
+Directory Size Cap: {{.DirSizeCap}}
+Directory File Cap: {{.DirFileCap}}
+Archive File Cap:   {{.ArchiveMax}}
+Compression:        {{.CompressLarge}}
 {{if .EmailContact}}Contact:   {{.EmailContact}}{{end}}
+
+INSTALL SHELL HELPER
+====================
+curl -sL https://raw.githubusercontent.com/morawskidotmy/transfer.ng/main/extras/transfer.sh >> ~/.bashrc
+curl -sL https://raw.githubusercontent.com/morawskidotmy/transfer.ng/main/extras/transfer.sh >> ~/.zshrc
 
 UPLOAD FILE
 ===========
@@ -62,7 +71,7 @@ REQUEST HEADERS
 Max-Downloads:      limit download count before deletion
 Max-Days:           days until file expires
 X-Encrypt-Password: encrypt file with aes256 on upload
-X-Decrypt-Password: decrypt file on download
+X-Decrypt-Password: decrypt file or archive entries on download
 X-Deletion-Token:   token to delete file (header alternative)
 X-Upload-Token:     write-secret to add files to an existing directory
 Range:              request partial content (bytes=0-1023)

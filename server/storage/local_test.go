@@ -262,11 +262,26 @@ func TestLocalStorage_Purge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
+	metadataName := filename + ".metadata"
+	if err = storage.Put(ctx, token, metadataName, bytes.NewReader([]byte("{}")), "text/json", 2); err != nil {
+		t.Fatalf("metadata Put failed: %v", err)
+	}
+	if err = storage.Put(ctx, token, localDirIndexName, bytes.NewReader([]byte("{}")), "text/json", 2); err != nil {
+		t.Fatalf("dir index Put failed: %v", err)
+	}
 
 	filePath := filepath.Join(basedir, token, filename)
+	metadataPath := filepath.Join(basedir, token, metadataName)
+	indexPath := filepath.Join(basedir, token, localDirIndexName)
 	oldTime := time.Now().Add(-48 * time.Hour)
 	if err := os.Chtimes(filePath, oldTime, oldTime); err != nil {
 		t.Fatalf("failed to change file time: %v", err)
+	}
+	if err := os.Chtimes(metadataPath, time.Now(), time.Now()); err != nil {
+		t.Fatalf("failed to change metadata time: %v", err)
+	}
+	if err := os.Chtimes(indexPath, time.Now(), time.Now()); err != nil {
+		t.Fatalf("failed to change index time: %v", err)
 	}
 
 	err = storage.Purge(ctx, 24*time.Hour)
@@ -277,5 +292,14 @@ func TestLocalStorage_Purge(t *testing.T) {
 	_, _, err = storage.Get(ctx, token, filename, nil)
 	if !storage.IsNotExist(err) {
 		t.Errorf("expected file to be purged")
+	}
+	if _, err = os.Stat(metadataPath); !os.IsNotExist(err) {
+		t.Errorf("expected orphan metadata to be removed, got %v", err)
+	}
+	if _, err = os.Stat(indexPath); !os.IsNotExist(err) {
+		t.Errorf("expected orphan directory index to be removed, got %v", err)
+	}
+	if _, err = os.Stat(filepath.Join(basedir, token)); !os.IsNotExist(err) {
+		t.Errorf("expected empty token directory to be removed, got %v", err)
 	}
 }

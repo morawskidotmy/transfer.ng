@@ -834,10 +834,11 @@ func (s *Server) dirZipHandler(w http.ResponseWriter, r *http.Request) {
 
 	zw := zip.NewWriter(w)
 	defer func() { _ = zw.Close() }()
+	password := r.Header.Get("X-Decrypt-Password")
 
 	var addedFiles int
 	for _, entry := range idx.Files {
-		reader, _, err := s.fetchFileForArchive(r.Context(), dirToken, entry.Name)
+		reader, _, err := s.fetchFileForArchive(r.Context(), dirToken, entry.Name, password)
 		if err != nil {
 			s.logger.Printf("directory: skipping %s/%s in zip: %v", dirToken, entry.Name, err)
 			continue
@@ -910,10 +911,11 @@ func (s *Server) dirTarGzHandler(w http.ResponseWriter, r *http.Request) {
 
 	zw := tar.NewWriter(gw)
 	defer storage.CloseCheck(zw)
+	password := r.Header.Get("X-Decrypt-Password")
 
 	var addedFiles int
 	for _, entry := range idx.Files {
-		reader, contentLength, err := s.fetchFileForArchive(r.Context(), dirToken, entry.Name)
+		reader, contentLength, err := s.fetchFileForArchive(r.Context(), dirToken, entry.Name, password)
 		if err != nil {
 			s.logger.Printf("directory: skipping %s/%s in tar.gz: %v", dirToken, entry.Name, err)
 			continue
