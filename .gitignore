@@ -6,6 +6,7 @@ bin/
 *.pyc
 *.egg-info/
 .idea/
+.opencode/
 transfer.ng
 .tmp
 .vagrant
