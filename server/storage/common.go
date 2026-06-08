@@ -29,11 +29,11 @@ func (r *Range) Range() string {
 // returns newContentLength if range was satisfied, otherwise returns given contentLength
 func (r *Range) AcceptLength(contentLength uint64) (newContentLength uint64) {
 	newContentLength = contentLength
+	if r.Start >= contentLength {
+		return
+	}
 	if r.Limit == 0 {
 		r.Limit = newContentLength - r.Start
-	}
-	if contentLength < r.Start {
-		return
 	}
 	if r.Limit > contentLength-r.Start {
 		return

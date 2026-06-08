@@ -92,6 +92,9 @@ func (s *LocalStorage) Get(_ context.Context, token string, filename string, rng
 	contentLength = SafeInt64ToUint64(fi.Size())
 	if rng != nil {
 		contentLength = rng.AcceptLength(contentLength)
+		if rng.ContentRange() == "" {
+			return file, contentLength, nil
+		}
 		if _, err = file.Seek(SafeUint64ToInt64(rng.Start), io.SeekStart); err != nil {
 			_ = file.Close()
 			return nil, 0, err
