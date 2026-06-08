@@ -499,6 +499,38 @@ func (s *suiteDirectory) TestDirectorySizeLimitRejectsOversizedFile(c *C) {
 	c.Assert(w.Code, Equals, http.StatusRequestEntityTooLarge)
 }
 
+func (s *suiteDirectory) TestMultipartDirectorySizeLimitRejectsOversizedFile(c *C) {
+	store, err := storage.NewLocalStorage(c.MkDir(), log.New(io.Discard, "", 0))
+	c.Assert(err, IsNil)
+
+	srvr, err := New(
+		UseStorage(store),
+		Logger(log.New(io.Discard, "", 0)),
+		RandomTokenLength(10),
+		TempPath(c.MkDir()),
+		MaxDirSize(10),
+	)
+	c.Assert(err, IsNil)
+
+	router := mux.NewRouter()
+	srvr.setupRoutes(router, http.NotFoundHandler())
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "too-big.txt")
+	c.Assert(err, IsNil)
+	_, err = part.Write([]byte("12345678901"))
+	c.Assert(err, IsNil)
+	c.Assert(writer.Close(), IsNil)
+
+	req := httptest.NewRequest("POST", "http://example.com/", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	c.Assert(w.Code, Equals, http.StatusRequestEntityTooLarge)
+}
+
 func (s *suiteDirectory) TestDirectorySizeLimitReplacementBecomesNewest(c *C) {
 	store, err := storage.NewLocalStorage(c.MkDir(), log.New(io.Discard, "", 0))
 	c.Assert(err, IsNil)
@@ -546,6 +578,51 @@ func (s *suiteDirectory) TestDirectorySizeLimitReplacementBecomesNewest(c *C) {
 	w = do(req)
 	c.Assert(w.Code, Equals, http.StatusOK)
 	c.Assert(w.Body.String(), Equals, "AAAAA")
+}
+
+func (s *suiteDirectory) TestDirectoryFileCountLimitAllowsReplacement(c *C) {
+	store, err := storage.NewLocalStorage(c.MkDir(), log.New(io.Discard, "", 0))
+	c.Assert(err, IsNil)
+
+	srvr, err := New(
+		UseStorage(store),
+		Logger(log.New(io.Discard, "", 0)),
+		RandomTokenLength(10),
+		TempPath(c.MkDir()),
+		MaxDirFiles(1),
+	)
+	c.Assert(err, IsNil)
+
+	router := mux.NewRouter()
+	srvr.setupRoutes(router, http.NotFoundHandler())
+
+	do := func(req *http.Request) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w
+	}
+
+	req := httptest.NewRequest("PUT", "http://example.com/file.txt", strings.NewReader("old"))
+	w := do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	dirURL := w.Header().Get("X-Url-Directory")
+	uploadToken := w.Header().Get("X-Upload-Token")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	req = httptest.NewRequest("PUT", "http://example.com/"+dirToken+"/file.txt", strings.NewReader("new"))
+	req.Header.Set("X-Upload-Token", uploadToken)
+	w = do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/file.txt", nil)
+	w = do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Body.String(), Equals, "new")
+
+	req = httptest.NewRequest("PUT", "http://example.com/"+dirToken+"/other.txt", strings.NewReader("other"))
+	req.Header.Set("X-Upload-Token", uploadToken)
+	w = do(req)
+	c.Assert(w.Code, Equals, http.StatusRequestEntityTooLarge)
 }
 
 func (s *suiteDirectory) TestDirectoryFileCountLimit(c *C) {
