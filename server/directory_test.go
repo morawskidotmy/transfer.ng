@@ -112,6 +112,22 @@ func (s *suiteDirectory) TestPreviewEscapesNestedDownloadURL(c *C) {
 
 	c.Assert(w.Code, Equals, http.StatusOK)
 	c.Assert(w.Body.String(), Matches, `(?s).*http://example\.com/get/`+dirToken+`/dir/file%20name\.txt.*`)
+	c.Assert(w.Body.String(), Matches, `(?s).*href="http://example\.com/`+dirToken+`/".*BACK TO DIRECTORY.*`)
+	c.Assert(w.Header().Get("Cache-Control"), Equals, "no-store")
+}
+
+func (s *suiteDirectory) TestDirectURLWithCurlAcceptDownloadsFile(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/curl.txt", strings.NewReader("curl body"))
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirToken := strings.Trim(strings.TrimPrefix(w.Header().Get("X-Url-Directory"), "http://example.com/"), "/")
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/curl.txt", nil)
+	req.Header.Set("Accept", "*/*")
+	w = s.do(req)
+
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Body.String(), Equals, "curl body")
 }
 
 func (s *suiteDirectory) TestUnsatisfiedRangeReturnsRequestedRangeNotSatisfiable(c *C) {
