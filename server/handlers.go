@@ -279,6 +279,7 @@ func isBotUserAgent(userAgent string) bool {
 
 func (s *Server) previewHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Vary", "Accept, Range, Referer, X-Decrypt-Password, User-Agent")
+	w.Header().Set("Cache-Control", "no-store")
 
 	vars := mux.Vars(r)
 	token := vars["token"]
@@ -327,6 +328,8 @@ func (s *Server) previewHandler(w http.ResponseWriter, r *http.Request) {
 	resolvedURL := resolveURL(r, relativeURL, s.proxyPort)
 	relativeURLGet, _ := url.Parse(path.Join(s.proxyPath, getPathPart, token, escapedPath))
 	resolvedURLGet := resolveURL(r, relativeURLGet, s.proxyPort)
+	directoryRelativeURL, _ := url.Parse(path.Join(s.proxyPath, token) + "/")
+	directoryURL := resolveURL(r, directoryRelativeURL, s.proxyPort)
 
 	png, err := qrcode.Encode(resolvedURL, qrcode.High, 150)
 	if err != nil {
@@ -340,6 +343,7 @@ func (s *Server) previewHandler(w http.ResponseWriter, r *http.Request) {
 		Filename       string
 		URL            string
 		URLGet         string
+		DirectoryURL   string
 		URLRandomToken string
 		Hostname       string
 		WebAddress     string
@@ -353,6 +357,7 @@ func (s *Server) previewHandler(w http.ResponseWriter, r *http.Request) {
 		filename,
 		resolvedURL,
 		resolvedURLGet,
+		directoryURL,
 		token,
 		getURL(r, s.proxyPort).Host,
 		resolveWebAddress(r, s.proxyPath, s.proxyPort),

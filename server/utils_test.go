@@ -97,6 +97,10 @@ func (s *suiteUtils) TestAcceptsHTML(c *C) {
 	h2.Set("Accept", "application/json")
 	c.Assert(acceptsHTML(h2), Equals, false)
 
+	h2 = http.Header{}
+	h2.Set("Accept", "*/*")
+	c.Assert(acceptsHTML(h2), Equals, false)
+
 	h3 := http.Header{}
 	c.Assert(acceptsHTML(h3), Equals, false)
 }
