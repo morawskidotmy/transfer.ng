@@ -594,6 +594,9 @@ func (s *Server) processUploadFile(w http.ResponseWriter, r *http.Request, token
 	if err != nil {
 		return false
 	}
+	if !s.validateDirFileSize(w, contentLength) {
+		return false
+	}
 
 	if s.performClamavPrescan {
 		if !s.runVirusScan(w, file.Name()) {
@@ -606,7 +609,13 @@ func (s *Server) processUploadFile(w http.ResponseWriter, r *http.Request, token
 	}
 
 	if err := s.registerFileInDir(r.Context(), token, filename, contentLength); err != nil {
-		s.logger.Printf("upload: failed to register file in directory: %v", err)
+		s.cleanupOrphanedUpload(r.Context(), token, filename)
+		if strings.Contains(err.Error(), "size limit") || strings.Contains(err.Error(), "file count limit") {
+			s.respondError(w, http.StatusRequestEntityTooLarge, err.Error(), "upload: %v", err)
+		} else {
+			s.respondError(w, http.StatusInternalServerError, "Could not register file", "upload: %v", err)
+		}
+		return false
 	}
 
 	return s.addResponseURL(w, r, token, filename, responseBody)

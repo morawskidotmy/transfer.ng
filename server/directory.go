@@ -209,6 +209,9 @@ func (s *Server) pruneDirToSize(ctx context.Context, dirToken string, idx *dirIn
 
 		entry := idx.Files[oldest]
 		if err := s.deleteDirFileObjects(ctx, dirToken, entry.Name); err != nil {
+			if saveErr := s.saveDirIndex(ctx, dirToken, removeFileFromDirIndex(idx, protectedFilename)); saveErr != nil {
+				s.logger.Printf("directory: failed to save partially pruned index for %s: %v", dirToken, saveErr)
+			}
 			return err
 		}
 		idx.TotalSize -= entry.Size
@@ -217,6 +220,19 @@ func (s *Server) pruneDirToSize(ctx context.Context, dirToken string, idx *dirIn
 	}
 
 	return nil
+}
+
+func removeFileFromDirIndex(idx *dirIndex, filename string) dirIndex {
+	clone := *idx
+	clone.Files = make([]fileEntry, 0, len(idx.Files))
+	for _, f := range idx.Files {
+		if f.Name == filename {
+			clone.TotalSize -= f.Size
+			continue
+		}
+		clone.Files = append(clone.Files, f)
+	}
+	return clone
 }
 
 func fileEntryOlder(a, b fileEntry) bool {
@@ -652,14 +668,14 @@ func (s *Server) listDirectoryHandler(w http.ResponseWriter, r *http.Request) {
 	writeDirectoryTextResponse(w, data)
 }
 
-func (s *Server) checkDirLimits(w http.ResponseWriter, r *http.Request, dirToken string) (dirIndex, bool) {
+func (s *Server) checkDirLimits(w http.ResponseWriter, r *http.Request, dirToken, filename string) (dirIndex, bool) {
 	idx, err := s.loadDirIndex(r.Context(), dirToken)
 	if err != nil {
 		s.respondError(w, http.StatusNotFound, "", "directory: %v", err)
 		return idx, false
 	}
 
-	if s.maxDirFiles > 0 && len(idx.Files) >= s.maxDirFiles {
+	if s.maxDirFiles > 0 && len(idx.Files) >= s.maxDirFiles && !dirIndexContainsFile(idx, filename) {
 		s.respondError(w, http.StatusRequestEntityTooLarge,
 			fmt.Sprintf("directory file count limit exceeded (max %d files)", s.maxDirFiles), "")
 		return idx, false
@@ -672,6 +688,15 @@ func (s *Server) checkDirLimits(w http.ResponseWriter, r *http.Request, dirToken
 	}
 
 	return idx, true
+}
+
+func dirIndexContainsFile(idx dirIndex, filename string) bool {
+	for _, f := range idx.Files {
+		if f.Name == filename {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) cleanupOrphanedUpload(ctx context.Context, dirToken, filename string) {
@@ -706,7 +731,7 @@ func (s *Server) putToDirHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := s.checkDirLimits(w, r, dirToken); !ok {
+	if _, ok := s.checkDirLimits(w, r, dirToken, filename); !ok {
 		return
 	}
 
