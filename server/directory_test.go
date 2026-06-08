@@ -412,7 +412,7 @@ func (s *suiteDirectory) TestDirectoryZipArchive(c *C) {
 	c.Assert(names["b.txt"], Equals, true)
 }
 
-func (s *suiteDirectory) TestDirectorySizeLimit(c *C) {
+func (s *suiteDirectory) TestDirectorySizeLimitPrunesOldestFiles(c *C) {
 	store, err := storage.NewLocalStorage(c.MkDir(), log.New(io.Discard, "", 0))
 	c.Assert(err, IsNil)
 
@@ -442,10 +442,110 @@ func (s *suiteDirectory) TestDirectorySizeLimit(c *C) {
 	uploadToken := w.Header().Get("X-Upload-Token")
 	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
 
-	req = httptest.NewRequest("PUT", "http://example.com/"+dirToken+"/big.txt", strings.NewReader("1234567890"))
+	req = httptest.NewRequest("PUT", "http://example.com/"+dirToken+"/medium.txt", strings.NewReader("abcde"))
 	req.Header.Set("X-Upload-Token", uploadToken)
 	w = do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	req = httptest.NewRequest("PUT", "http://example.com/"+dirToken+"/new.txt", strings.NewReader("vwxyz"))
+	req.Header.Set("X-Upload-Token", uploadToken)
+	w = do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/small.txt", nil)
+	w = do(req)
+	c.Assert(w.Code, Equals, http.StatusNotFound)
+
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/medium.txt", nil)
+	w = do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Body.String(), Equals, "abcde")
+
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/new.txt", nil)
+	w = do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Body.String(), Equals, "vwxyz")
+
+	idx, err := srvr.loadDirIndex(req.Context(), dirToken)
+	c.Assert(err, IsNil)
+	c.Assert(idx.TotalSize, Equals, int64(10))
+	c.Assert(len(idx.Files), Equals, 2)
+}
+
+func (s *suiteDirectory) TestDirectorySizeLimitRejectsOversizedFile(c *C) {
+	store, err := storage.NewLocalStorage(c.MkDir(), log.New(io.Discard, "", 0))
+	c.Assert(err, IsNil)
+
+	srvr, err := New(
+		UseStorage(store),
+		Logger(log.New(io.Discard, "", 0)),
+		RandomTokenLength(10),
+		TempPath(c.MkDir()),
+		MaxDirSize(10),
+	)
+	c.Assert(err, IsNil)
+
+	router := mux.NewRouter()
+	srvr.setupRoutes(router, http.NotFoundHandler())
+
+	do := func(req *http.Request) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w
+	}
+
+	req := httptest.NewRequest("PUT", "http://example.com/too-big.txt", strings.NewReader("12345678901"))
+	w := do(req)
 	c.Assert(w.Code, Equals, http.StatusRequestEntityTooLarge)
+}
+
+func (s *suiteDirectory) TestDirectorySizeLimitReplacementBecomesNewest(c *C) {
+	store, err := storage.NewLocalStorage(c.MkDir(), log.New(io.Discard, "", 0))
+	c.Assert(err, IsNil)
+
+	srvr, err := New(
+		UseStorage(store),
+		Logger(log.New(io.Discard, "", 0)),
+		RandomTokenLength(10),
+		TempPath(c.MkDir()),
+		MaxDirSize(10),
+	)
+	c.Assert(err, IsNil)
+
+	router := mux.NewRouter()
+	srvr.setupRoutes(router, http.NotFoundHandler())
+
+	do := func(req *http.Request) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w
+	}
+
+	req := httptest.NewRequest("PUT", "http://example.com/a.txt", strings.NewReader("aaaaa"))
+	w := do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	dirURL := w.Header().Get("X-Url-Directory")
+	uploadToken := w.Header().Get("X-Upload-Token")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	req = httptest.NewRequest("PUT", "http://example.com/"+dirToken+"/b.txt", strings.NewReader("bbbbb"))
+	req.Header.Set("X-Upload-Token", uploadToken)
+	c.Assert(do(req).Code, Equals, http.StatusOK)
+
+	req = httptest.NewRequest("PUT", "http://example.com/"+dirToken+"/a.txt", strings.NewReader("AAAAA"))
+	req.Header.Set("X-Upload-Token", uploadToken)
+	c.Assert(do(req).Code, Equals, http.StatusOK)
+
+	req = httptest.NewRequest("PUT", "http://example.com/"+dirToken+"/c.txt", strings.NewReader("ccccc"))
+	req.Header.Set("X-Upload-Token", uploadToken)
+	c.Assert(do(req).Code, Equals, http.StatusOK)
+
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/b.txt", nil)
+	c.Assert(do(req).Code, Equals, http.StatusNotFound)
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/a.txt", nil)
+	w = do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Body.String(), Equals, "AAAAA")
 }
 
 func (s *suiteDirectory) TestDirectoryFileCountLimit(c *C) {
