@@ -14,6 +14,21 @@ Test it:
 curl --upload-file hello.txt http://localhost:8080/hello.txt
 ```
 
+## Client Shell Helper
+
+Users can install the bash/zsh `transfer` helper directly from the repository:
+
+```bash
+curl -sL https://raw.githubusercontent.com/morawskidotmy/transfer.ng/main/extras/transfer.sh >> ~/.bashrc
+curl -sL https://raw.githubusercontent.com/morawskidotmy/transfer.ng/main/extras/transfer.sh >> ~/.zshrc
+```
+
+Set `TRANSFER_HOST` if your service is not hosted at the default public instance:
+
+```bash
+export TRANSFER_HOST=https://transfer.example.com
+```
+
 ## All Flags
 
 ### Network
@@ -88,9 +103,11 @@ curl --upload-file hello.txt http://localhost:8080/hello.txt
 | `--max-upload-size` | `MAX_UPLOAD_SIZE` | `0` | Max upload size in KB (`0` = unlimited) |
 | `--rate-limit` | `RATE_LIMIT` | `0` | Max download requests per minute per IP (`0` = unlimited) |
 | `--rate-limit-uploads` | `RATE_LIMIT_UPLOADS` | `0` | Max upload requests per minute per IP (`0` = unlimited) |
-| `--max-dir-size` | `MAX_DIR_SIZE` | `0` | Max total size of files in a directory (e.g. `1g`, `500m`). `0` = unlimited |
+| `--max-dir-size` | `MAX_DIR_SIZE` | `0` | Rolling directory size cap (e.g. `5g`, `500m`). On new upload, oldest files in that directory are deleted until the new file fits. A single file larger than the cap is rejected. `0` = unlimited |
 | `--max-dir-files` | `MAX_DIR_FILES` | `0` | Max number of files per directory. `0` = unlimited |
 | `--max-archive-files` | `MAX_ARCHIVE_FILES` | `100` | Max files in a zip/tar.gz archive download |
+
+Directory uploads always create or use a directory token. `MAX_DIR_SIZE` is enforced per directory, not globally across storage.
 
 ### Retention
 
@@ -104,6 +121,8 @@ curl --upload-file hello.txt http://localhost:8080/hello.txt
 | Flag | Env Var | Default | Description |
 |------|---------|---------|-------------|
 | `--compress-large` | `COMPRESS_LARGE` | `10m` | Transparently zstd-compress files larger than this (e.g. `10m`, `1g`). Set to `0` to disable |
+
+Compressed files are decompressed automatically on download and in directory archives. Range requests are disabled for transformed content because stored byte offsets do not match served bytes.
 
 ### Timeouts
 
@@ -133,6 +152,10 @@ curl --upload-file hello.txt http://localhost:8080/hello.txt
 | `--email-contact` | `EMAIL_CONTACT` | `""` | Contact email shown on the web UI |
 | `--ga-key` | `GA_KEY` | `""` | Google Analytics tracking ID |
 | `--uservoice-key` | `USERVOICE_KEY` | `""` | UserVoice widget key |
+
+### Supported Go / CI
+
+The module targets Go `1.26` with toolchain `go1.26.4`. CI installs Go `1.26.4` for tests, formatting, security scanning, Docker/release builds, and builds golangci-lint from source with that same Go version so linting supports the module target.
 
 ## Hosting Scenarios
 

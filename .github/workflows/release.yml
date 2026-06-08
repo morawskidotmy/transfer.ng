@@ -107,7 +107,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: ^1.26
+          go-version: '1.26.4'
 
       - name: Get project dependencies
         run: go mod download
@@ -168,4 +168,3 @@ jobs:
             ./transfersh-${{ steps.get_filename.outputs.GIT_TAG }}-${{ steps.get_filename.outputs.ASSET_NAME }}/transfersh-${{ steps.get_filename.outputs.GIT_TAG }}-${{ steps.get_filename.outputs.ASSET_NAME }}*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-

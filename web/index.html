@@ -214,6 +214,34 @@
         Files are deleted after {{.PurgeTime}}
       </div>
       {{end}}
+      <div class="info-row">
+        <span class="info-label">Directory Size Cap:</span>
+        {{.DirSizeCap}}
+      </div>
+      <div class="info-row">
+        <span class="info-label">Directory File Cap:</span>
+        {{.DirFileCap}}
+      </div>
+      <div class="info-row">
+        <span class="info-label">Archive File Cap:</span>
+        {{.ArchiveMax}}
+      </div>
+      <div class="info-row">
+        <span class="info-label">Compression:</span>
+        {{.CompressLarge}}
+      </div>
+    </div>
+
+    <div class="section" style="margin-bottom: 20px;">
+      <div class="section-header">
+        <div class="section-icon">+</div>
+        <div style="font-weight: bold; font-size: 1.05em;">INSTALL SHELL HELPER</div>
+      </div>
+      <div class="description">
+        Add the <code>transfer</code> function to bash or zsh:
+      </div>
+      <pre>curl -sL https://raw.githubusercontent.com/morawskidotmy/transfer.ng/main/extras/transfer.sh &gt;&gt; ~/.bashrc
+curl -sL https://raw.githubusercontent.com/morawskidotmy/transfer.ng/main/extras/transfer.sh &gt;&gt; ~/.zshrc</pre>
     </div>
 
     <div class="grid">
@@ -252,9 +280,10 @@
         </div>
         <pre>curl {{.WebAddress}}TOKEN/</pre>
         <div class="description">
-          Download all files as a zip archive:
+          Download all files as an archive:
         </div>
-        <pre>curl -O {{.WebAddress}}TOKEN/.zip</pre>
+        <pre>curl -O {{.WebAddress}}TOKEN/.zip
+curl -O {{.WebAddress}}TOKEN/.tar.gz</pre>
         <div class="description">
           Delete a directory and all its files:
         </div>
@@ -377,7 +406,7 @@
         </div>
         <div class="option-item">
           <span class="option-name">X-Decrypt-Password:</span>
-          <span class="option-desc">decrypt file on download</span>
+          <span class="option-desc">decrypt file or archive entries on download</span>
         </div>
         <div class="option-item">
           <span class="option-name">X-Deletion-Token:</span>
@@ -398,6 +427,14 @@
         <div class="option-item">
           <span class="option-name">X-Url-Delete:</span>
           <span class="option-desc">full url to delete the file</span>
+        </div>
+        <div class="option-item">
+          <span class="option-name">X-Url-Directory:</span>
+          <span class="option-desc">directory listing url for the upload</span>
+        </div>
+        <div class="option-item">
+          <span class="option-name">X-Upload-Token:</span>
+          <span class="option-desc">write-secret for adding files to that directory</span>
         </div>
         <div class="option-item">
           <span class="option-name">X-Remaining-Downloads:</span>

@@ -390,6 +390,22 @@ func (s *Server) viewHandler(w http.ResponseWriter, r *http.Request) {
 	if s.maxUploadSize > 0 {
 		maxUploadSize = formatSize(s.maxUploadSize)
 	}
+	dirSizeCap := "unlimited"
+	if s.maxDirSize > 0 {
+		dirSizeCap = formatSize(s.maxDirSize)
+	}
+	dirFileCap := "unlimited"
+	if s.maxDirFiles > 0 {
+		dirFileCap = strconv.Itoa(s.maxDirFiles)
+	}
+	archiveFileCap := strconv.Itoa(defaultMaxArchiveFiles)
+	if s.maxArchiveFiles > 0 {
+		archiveFileCap = strconv.Itoa(s.maxArchiveFiles)
+	}
+	compressionThreshold := "disabled"
+	if s.compressionThreshold > 0 {
+		compressionThreshold = "files larger than " + formatSize(s.compressionThreshold)
+	}
 
 	purgeTime := ""
 	if s.purgeDays > 0 {
@@ -404,6 +420,10 @@ func (s *Server) viewHandler(w http.ResponseWriter, r *http.Request) {
 		UserVoiceKey  string
 		PurgeTime     string
 		MaxUploadSize string
+		DirSizeCap    string
+		DirFileCap    string
+		ArchiveMax    string
+		CompressLarge string
 		SampleToken   string
 		SampleToken2  string
 	}{
@@ -414,6 +434,10 @@ func (s *Server) viewHandler(w http.ResponseWriter, r *http.Request) {
 		s.userVoiceKey,
 		purgeTime,
 		maxUploadSize,
+		dirSizeCap,
+		dirFileCap,
+		archiveFileCap,
+		compressionThreshold,
 		s.sampleTokenA,
 		s.sampleTokenB,
 	}
@@ -1157,20 +1181,18 @@ func (s *Server) checkDeletionToken(ctx context.Context, deletionToken, token, f
 
 func (s *Server) purgeHandler() {
 	ticker := time.NewTicker(s.purgeInterval)
-	go func() {
-		defer ticker.Stop()
-		for {
-			select {
-			case <-s.purgeCtx.Done():
-				return
-			case <-ticker.C:
-				err := s.storage.Purge(s.purgeCtx, s.purgeDays)
-				if err != nil {
-					s.logger.Printf("error cleaning up expired files: %v", err)
-				}
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.purgeCtx.Done():
+			return
+		case <-ticker.C:
+			err := s.storage.Purge(s.purgeCtx, s.purgeDays)
+			if err != nil {
+				s.logger.Printf("error cleaning up expired files: %v", err)
 			}
 		}
-	}()
+	}
 }
 
 func (s *Server) deleteHandler(w http.ResponseWriter, r *http.Request) {
@@ -1246,7 +1268,7 @@ func (s *Server) parseArchiveFiles(filesSpec string) ([]archiveFileSpec, error) 
 	return specs, nil
 }
 
-func (s *Server) fetchFileForArchive(ctx context.Context, token, filename string) (io.ReadCloser, uint64, error) {
+func (s *Server) fetchFileForArchive(ctx context.Context, token, filename, password string) (io.ReadCloser, uint64, error) {
 	meta, err := s.checkMetadata(ctx, token, filename, true)
 	if err != nil {
 		return nil, 0, err
@@ -1255,6 +1277,19 @@ func (s *Server) fetchFileForArchive(ctx context.Context, token, filename string
 	reader, contentLength, err := s.storage.Get(ctx, token, filename, nil)
 	if err != nil {
 		return nil, 0, err
+	}
+
+	if meta.Encrypted {
+		if password == "" {
+			storage.CloseCheck(reader)
+			return nil, 0, errors.New("encrypted file requires X-Decrypt-Password")
+		}
+		reader, err = attachDecryptionReader(reader, password)
+		if err != nil {
+			storage.CloseCheck(reader)
+			return nil, 0, err
+		}
+		contentLength = storage.SafeInt64ToUint64(meta.ContentLength)
 	}
 
 	if meta.Compressed {
@@ -1288,9 +1323,10 @@ func (s *Server) zipHandler(w http.ResponseWriter, r *http.Request) {
 	commonHeader(w, zipfilename)
 
 	zw := zip.NewWriter(w)
+	password := r.Header.Get("X-Decrypt-Password")
 
 	for _, spec := range specs {
-		reader, _, err := s.fetchFileForArchive(r.Context(), spec.token, spec.filename)
+		reader, _, err := s.fetchFileForArchive(r.Context(), spec.token, spec.filename, password)
 		if err != nil {
 			s.logger.Printf("zip: skipping %s/%s: %v", spec.token, spec.filename, err)
 			continue
@@ -1342,9 +1378,10 @@ func (s *Server) tarGzHandler(w http.ResponseWriter, r *http.Request) {
 
 	zw := tar.NewWriter(gw)
 	defer storage.CloseCheck(zw)
+	password := r.Header.Get("X-Decrypt-Password")
 
 	for _, spec := range specs {
-		reader, contentLength, err := s.fetchFileForArchive(r.Context(), spec.token, spec.filename)
+		reader, contentLength, err := s.fetchFileForArchive(r.Context(), spec.token, spec.filename, password)
 		if err != nil {
 			s.logger.Printf("tarGz: skipping %s/%s: %v", spec.token, spec.filename, err)
 			continue
@@ -1386,9 +1423,10 @@ func (s *Server) tarHandler(w http.ResponseWriter, r *http.Request) {
 
 	zw := tar.NewWriter(w)
 	defer storage.CloseCheck(zw)
+	password := r.Header.Get("X-Decrypt-Password")
 
 	for _, spec := range specs {
-		reader, contentLength, err := s.fetchFileForArchive(r.Context(), spec.token, spec.filename)
+		reader, contentLength, err := s.fetchFileForArchive(r.Context(), spec.token, spec.filename, password)
 		if err != nil {
 			s.logger.Printf("tar: skipping %s/%s: %v", spec.token, spec.filename, err)
 			continue
@@ -1503,7 +1541,11 @@ func (s *Server) getHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reader, contentLength = s.handleDecryptionAndCompression(reader, contentLength, &metadata, password)
+	reader, contentLength, err = s.handleDecryptionAndCompression(reader, contentLength, &metadata, password)
+	if err != nil {
+		s.respondError(w, http.StatusInternalServerError, "Could not decode file", "%v", err)
+		return
+	}
 	s.setDownloadResponseHeaders(w, filename, action, disposition, contentType, contentLength, &metadata, rng)
 	reader = sanitizeInlineReader(reader, disposition, contentType)
 
@@ -1645,7 +1687,7 @@ func (s *Server) setCommonHeaders(w http.ResponseWriter, filename, disposition, 
 	w.Header().Set("X-Remaining-Days", remainingDays)
 }
 
-func (s *Server) handleDecryptionAndCompression(reader io.ReadCloser, contentLength uint64, metadata *metadata, password string) (io.ReadCloser, uint64) {
+func (s *Server) handleDecryptionAndCompression(reader io.ReadCloser, contentLength uint64, metadata *metadata, password string) (io.ReadCloser, uint64, error) {
 	if metadata.Encrypted && len(password) > 0 {
 		contentLength = storage.SafeInt64ToUint64(metadata.ContentLength)
 	}
@@ -1653,13 +1695,13 @@ func (s *Server) handleDecryptionAndCompression(reader io.ReadCloser, contentLen
 	if metadata.Compressed {
 		compressionReader, err := NewCompressionReader(reader, true)
 		if err != nil {
-			return reader, contentLength
+			return reader, contentLength, err
 		}
 		reader = compressionReader
 		contentLength = storage.SafeInt64ToUint64(metadata.ContentLength)
 	}
 
-	return reader, contentLength
+	return reader, contentLength, nil
 }
 
 func commonHeader(w http.ResponseWriter, filename string) {

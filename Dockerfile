@@ -1,5 +1,5 @@
-# Default to Go 1.24
-ARG GO_VERSION=1.24
+# Default to Go 1.26
+ARG GO_VERSION=1.26.4
 FROM golang:${GO_VERSION}-alpine AS build
 
 RUN apk add git musl-dev mailcap

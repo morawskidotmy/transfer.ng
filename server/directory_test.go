@@ -412,6 +412,55 @@ func (s *suiteDirectory) TestDirectoryZipArchive(c *C) {
 	c.Assert(names["b.txt"], Equals, true)
 }
 
+func (s *suiteDirectory) TestZipHandlerClosesArchive(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/archive.txt", strings.NewReader("archive body"))
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirURL := w.Header().Get("X-Url-Directory")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/archive.txt.zip", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	zr, err := zip.NewReader(bytes.NewReader(w.Body.Bytes()), int64(w.Body.Len()))
+	c.Assert(err, IsNil)
+	c.Assert(len(zr.File), Equals, 1)
+	c.Assert(zr.File[0].Name, Equals, "archive.txt")
+}
+
+func (s *suiteDirectory) TestEncryptedDirectoryZipRequiresPassword(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/secret.txt", strings.NewReader("hidden body"))
+	req.Header.Set("X-Encrypt-Password", "secret")
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirURL := w.Header().Get("X-Url-Directory")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/.zip", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	zr, err := zip.NewReader(bytes.NewReader(w.Body.Bytes()), int64(w.Body.Len()))
+	c.Assert(err, IsNil)
+	c.Assert(len(zr.File), Equals, 0)
+
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/.zip", nil)
+	req.Header.Set("X-Decrypt-Password", "secret")
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	zr, err = zip.NewReader(bytes.NewReader(w.Body.Bytes()), int64(w.Body.Len()))
+	c.Assert(err, IsNil)
+	c.Assert(len(zr.File), Equals, 1)
+	rc, err := zr.File[0].Open()
+	c.Assert(err, IsNil)
+	defer func() { _ = rc.Close() }()
+	contents, err := io.ReadAll(rc)
+	c.Assert(err, IsNil)
+	c.Assert(string(contents), Equals, "hidden body")
+}
+
 func (s *suiteDirectory) TestDirectorySizeLimitPrunesOldestFiles(c *C) {
 	store, err := storage.NewLocalStorage(c.MkDir(), log.New(io.Discard, "", 0))
 	c.Assert(err, IsNil)

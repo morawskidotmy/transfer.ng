@@ -2,14 +2,20 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
+
+const localDirIndexName = ".dir.json"
 
 // LocalStorage is a local storage
 type LocalStorage struct {
@@ -121,13 +127,18 @@ func (s *LocalStorage) Delete(_ context.Context, token string, filename string) 
 
 // Purge removes files older than the specified duration from local storage.
 func (s *LocalStorage) Purge(_ context.Context, days time.Duration) (err error) {
-	err = filepath.Walk(s.basedir,
-		func(path string, info os.FileInfo, walkErr error) error {
+	err = filepath.WalkDir(s.basedir,
+		func(path string, d fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				s.logger.Printf("purge: walk error for %s: %v", path, walkErr)
 				return nil
 			}
-			if info.IsDir() {
+			if d.IsDir() {
+				return nil
+			}
+			info, statErr := d.Info()
+			if statErr != nil {
+				s.logger.Printf("purge: stat error for %s: %v", path, statErr)
 				return nil
 			}
 
@@ -142,8 +153,112 @@ func (s *LocalStorage) Purge(_ context.Context, days time.Duration) (err error) 
 
 			return nil
 		})
+	if err != nil {
+		return err
+	}
 
-	return
+	return s.cleanupPurgeArtifacts()
+}
+
+func (s *LocalStorage) cleanupPurgeArtifacts() error {
+	if err := s.removeOrphanMetadata(); err != nil {
+		return err
+	}
+	if err := s.removeOrphanDirIndexes(); err != nil {
+		return err
+	}
+	return s.removeEmptyDirs()
+}
+
+func (s *LocalStorage) removeOrphanMetadata() error {
+	return filepath.WalkDir(s.basedir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			s.logger.Printf("purge: walk error for %s: %v", path, walkErr)
+			return nil
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".metadata") {
+			return nil
+		}
+		dataPath := strings.TrimSuffix(path, ".metadata")
+		if _, err := os.Stat(dataPath); os.IsNotExist(err) {
+			// #nosec G122 -- purge cleanup is best-effort; paths are discovered under basedir
+			// and stale metadata removal is safe if a concurrent upload recreates the file.
+			if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+				s.logger.Printf("purge: failed to remove orphan metadata %s: %v", path, rmErr)
+			}
+		}
+		return nil
+	})
+}
+
+func (s *LocalStorage) removeOrphanDirIndexes() error {
+	entries, err := os.ReadDir(s.basedir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		tokenDir := filepath.Join(s.basedir, entry.Name())
+		hasData, err := hasLocalDataFiles(tokenDir)
+		if err != nil {
+			s.logger.Printf("purge: failed to inspect %s: %v", tokenDir, err)
+			continue
+		}
+		if !hasData {
+			idxPath := filepath.Join(tokenDir, localDirIndexName)
+			if rmErr := os.Remove(idxPath); rmErr != nil && !os.IsNotExist(rmErr) {
+				s.logger.Printf("purge: failed to remove orphan index %s: %v", idxPath, rmErr)
+			}
+		}
+	}
+	return nil
+}
+
+func hasLocalDataFiles(root string) (bool, error) {
+	hasData := false
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		name := filepath.Base(path)
+		if name == localDirIndexName || strings.HasSuffix(name, ".metadata") {
+			return nil
+		}
+		hasData = true
+		return filepath.SkipAll
+	})
+	return hasData, err
+}
+
+func (s *LocalStorage) removeEmptyDirs() error {
+	var dirs []string
+	if err := filepath.WalkDir(s.basedir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			s.logger.Printf("purge: walk error for %s: %v", path, walkErr)
+			return nil
+		}
+		if d.IsDir() && path != s.basedir {
+			dirs = append(dirs, path)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i]) > len(dirs[j]) })
+	for _, dir := range dirs {
+		if err := os.Remove(dir); err != nil && !os.IsNotExist(err) && !errors.Is(err, syscall.ENOTEMPTY) && !errors.Is(err, syscall.EEXIST) {
+			s.logger.Printf("purge: failed to remove empty directory %s: %v", dir, err)
+		}
+	}
+	return nil
 }
 
 // IsNotExist indicates if a file doesn't exist on storage
