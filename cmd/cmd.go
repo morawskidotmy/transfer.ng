@@ -373,7 +373,7 @@ var globalFlags = []cli.Flag{
 	},
 	&cli.StringFlag{
 		Name:    "max-dir-size",
-		Usage:   "max total size of files in a directory (e.g. 1g, 500m). 0 means unlimited",
+		Usage:   "rolling max total size of files in a directory (e.g. 5g, 500m); oldest files are deleted on new upload. 0 means unlimited",
 		Value:   "0",
 		EnvVars: []string{"MAX_DIR_SIZE"},
 	},

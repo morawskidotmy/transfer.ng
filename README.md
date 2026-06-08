@@ -198,6 +198,8 @@ transfer.ng --provider=local --listener :8080 --basedir /data/
 | `RATE_LIMIT_UPLOADS` | Upload requests per minute per IP |
 | `CLAMAV_TIMEOUT` | ClamAV scan timeout (default: 60s) |
 | `COMPRESS_LARGE` | Compress files larger than this (e.g., `10m`) |
+| `MAX_DIR_SIZE` | Rolling directory size cap (e.g., `5g`); oldest files are deleted on new upload to stay under the cap |
+| `MAX_DIR_FILES` | Max files in a directory; `0` means unlimited |
 | `RANDOM_TOKEN_LENGTH` | Length of random tokens (default: 6) |
 | `CORS_DOMAINS` | Comma-separated CORS allowed domains |
 | `HTTP_AUTH_USER` | Basic auth username |
@@ -241,6 +243,14 @@ Files larger than `--compress-large` are automatically compressed with zstd on u
 
 ```bash
 transfer.ng --provider=local --compress-large=10m
+```
+
+## Directory Limits
+
+`--max-dir-size` / `MAX_DIR_SIZE` keeps each upload directory under a rolling size cap. When a new file would push the directory over the cap, the oldest existing files in that directory are deleted until the new file fits. A single file larger than the cap is rejected.
+
+```bash
+transfer.ng --provider=local --max-dir-size=5g
 ```
 
 ## Development

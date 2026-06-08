@@ -33,8 +33,9 @@ var reservedFilenames = map[string]bool{
 
 // fileEntry represents a file in a directory with its size.
 type fileEntry struct {
-	Name string
-	Size int64
+	Name     string
+	Size     int64
+	Modified time.Time
 }
 
 // dirIndex describes a directory (token) and the files it contains.
@@ -151,6 +152,7 @@ func (s *Server) createDirectory(ctx context.Context) (dirToken, uploadToken str
 func (s *Server) registerFileInDir(ctx context.Context, dirToken, filename string, fileSize int64) error {
 	s.lock(dirToken, dirIndexName)
 	defer s.unlock(dirToken, dirIndexName)
+	now := time.Now()
 
 	idx, err := s.loadDirIndex(ctx, dirToken)
 	if err != nil {
@@ -160,28 +162,85 @@ func (s *Server) registerFileInDir(ctx context.Context, dirToken, filename strin
 		idx = dirIndex{Created: time.Now()}
 	}
 
-	for i, f := range idx.Files {
+	if s.maxDirSize > 0 && fileSize > s.maxDirSize {
+		return fmt.Errorf("file size exceeds directory size limit (max %d bytes)", s.maxDirSize)
+	}
+
+	files := idx.Files[:0]
+	for _, f := range idx.Files {
 		if f.Name == filename {
 			idx.TotalSize -= f.Size
-			idx.Files[i].Size = fileSize
-			idx.TotalSize += fileSize
-			return s.saveDirIndex(ctx, dirToken, idx)
+			continue
 		}
+		files = append(files, f)
 	}
+	idx.Files = files
 
-	// Check directory size limit
-	if s.maxDirSize > 0 && idx.TotalSize+fileSize > s.maxDirSize {
-		return fmt.Errorf("directory size limit exceeded (max %d bytes)", s.maxDirSize)
-	}
-
-	// Check directory file count limit
 	if s.maxDirFiles > 0 && len(idx.Files) >= s.maxDirFiles {
 		return fmt.Errorf("directory file count limit exceeded (max %d files)", s.maxDirFiles)
 	}
 
-	idx.Files = append(idx.Files, fileEntry{Name: filename, Size: fileSize})
+	idx.Files = append(idx.Files, fileEntry{Name: filename, Size: fileSize, Modified: now})
 	idx.TotalSize += fileSize
+	if err := s.pruneDirToSize(ctx, dirToken, &idx, filename); err != nil {
+		return err
+	}
 	return s.saveDirIndex(ctx, dirToken, idx)
+}
+
+func (s *Server) pruneDirToSize(ctx context.Context, dirToken string, idx *dirIndex, protectedFilename string) error {
+	if s.maxDirSize <= 0 {
+		return nil
+	}
+
+	for idx.TotalSize > s.maxDirSize {
+		oldest := -1
+		for i, f := range idx.Files {
+			if f.Name == protectedFilename {
+				continue
+			}
+			if oldest == -1 || fileEntryOlder(f, idx.Files[oldest]) {
+				oldest = i
+			}
+		}
+		if oldest == -1 {
+			return fmt.Errorf("directory size limit exceeded (max %d bytes)", s.maxDirSize)
+		}
+
+		entry := idx.Files[oldest]
+		if err := s.deleteDirFileObjects(ctx, dirToken, entry.Name); err != nil {
+			return err
+		}
+		idx.TotalSize -= entry.Size
+		idx.Files = append(idx.Files[:oldest], idx.Files[oldest+1:]...)
+		s.logger.Printf("directory: pruned %s/%s to enforce max directory size", dirToken, entry.Name)
+	}
+
+	return nil
+}
+
+func fileEntryOlder(a, b fileEntry) bool {
+	if a.Modified.IsZero() && b.Modified.IsZero() {
+		return false
+	}
+	if a.Modified.IsZero() {
+		return true
+	}
+	if b.Modified.IsZero() {
+		return false
+	}
+	return a.Modified.Before(b.Modified)
+}
+
+func (s *Server) deleteDirFileObjects(ctx context.Context, dirToken, filename string) error {
+	if err := s.storage.Delete(ctx, dirToken, filename); err != nil && !s.storage.IsNotExist(err) {
+		return fmt.Errorf("delete %s: %w", filename, err)
+	}
+	metadataName := fmt.Sprintf("%s.metadata", filename)
+	if err := s.storage.Delete(ctx, dirToken, metadataName); err != nil && !s.storage.IsNotExist(err) {
+		return fmt.Errorf("delete %s: %w", metadataName, err)
+	}
+	return nil
 }
 
 // unregisterFileFromDir removes filename from the directory index (best effort).
@@ -606,9 +665,9 @@ func (s *Server) checkDirLimits(w http.ResponseWriter, r *http.Request, dirToken
 		return idx, false
 	}
 
-	if s.maxDirSize > 0 && r.ContentLength > 0 && idx.TotalSize+r.ContentLength > s.maxDirSize {
+	if s.maxDirSize > 0 && r.ContentLength > s.maxDirSize {
 		s.respondError(w, http.StatusRequestEntityTooLarge,
-			fmt.Sprintf("directory size limit exceeded (max %d bytes)", s.maxDirSize), "")
+			fmt.Sprintf("file size exceeds directory size limit (max %d bytes)", s.maxDirSize), "")
 		return idx, false
 	}
 

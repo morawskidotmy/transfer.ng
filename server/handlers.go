@@ -773,7 +773,7 @@ func (s *Server) putHandler(w http.ResponseWriter, r *http.Request) {
 	idx := dirIndex{
 		UploadToken: uploadToken,
 		Created:     time.Now(),
-		Files:       []fileEntry{{Name: filename, Size: contentLength}},
+		Files:       []fileEntry{{Name: filename, Size: contentLength, Modified: time.Now()}},
 		TotalSize:   contentLength,
 		SizeKnown:   true,
 	}
@@ -818,6 +818,9 @@ func (s *Server) doPutUpload(w http.ResponseWriter, r *http.Request, putToken, f
 	if !s.validateUploadSize(w, contentLength) {
 		return false, 0
 	}
+	if !s.validateDirFileSize(w, contentLength) {
+		return false, 0
+	}
 
 	contentType := mime.TypeByExtension(filepath.Ext(filename))
 	if !s.processPutUpload(w, r, putToken, filename, contentType, contentLength, reader) {
@@ -848,6 +851,16 @@ func (s *Server) validateUploadSize(w http.ResponseWriter, contentLength int64) 
 	if s.maxUploadSize > 0 && contentLength > s.maxUploadSize {
 		s.logger.Print("Entity too large")
 		http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+		return false
+	}
+
+	return true
+}
+
+func (s *Server) validateDirFileSize(w http.ResponseWriter, contentLength int64) bool {
+	if s.maxDirSize > 0 && contentLength > s.maxDirSize {
+		s.logger.Print("File exceeds directory size limit")
+		http.Error(w, fmt.Sprintf("file size exceeds directory size limit (max %d bytes)", s.maxDirSize), http.StatusRequestEntityTooLarge)
 		return false
 	}
 
