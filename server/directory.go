@@ -360,10 +360,17 @@ func applyPagination(entries []dirFileEntry, page, limit int) (paginated []dirFi
 		return entries, totalPages, page
 	}
 
+	if totalFiles == 0 {
+		return []dirFileEntry{}, 1, 1
+	}
+
 	totalPages = (totalFiles + limit - 1) / limit
 	adjustedPage = page
 	if adjustedPage > totalPages {
 		adjustedPage = totalPages
+	}
+	if adjustedPage < 1 {
+		adjustedPage = 1
 	}
 
 	start := (adjustedPage - 1) * limit
@@ -485,7 +492,7 @@ func buildBreadcrumbs(r *http.Request, token, subpath, proxyPath, proxyPort stri
 			cumulative = cumulative + "/" + part
 		}
 
-		relativeURL, _ := url.Parse(path.Join(proxyPath, token, cumulative) + "/")
+		relativeURL, _ := url.Parse(path.Join(proxyPath, token, escapePathForURL(cumulative)) + "/")
 		crumbs = append(crumbs, breadcrumb{
 			Name: part,
 			URL:  resolveURL(r, relativeURL, proxyPort),
@@ -548,9 +555,10 @@ func (s *Server) listDirectoryHandler(w http.ResponseWriter, r *http.Request) {
 		s.removeStaleFilesFromDir(r.Context(), dirToken, staleFiles)
 	}
 
-	subdirBase := path.Join(s.proxyPath, dirToken, subpath)
+	subdirBase := path.Join(s.proxyPath, dirToken, escapePathForURL(subpath))
 	for i := range subdirs {
-		relativeURL, _ := url.Parse(path.Join(subdirBase, subdirs[i].Name) + "/")
+		name := strings.TrimSuffix(subdirs[i].Name, "/")
+		relativeURL, _ := url.Parse(path.Join(subdirBase, escapePathForURL(name)) + "/")
 		subdirs[i].URL = resolveURL(r, relativeURL, s.proxyPort)
 	}
 

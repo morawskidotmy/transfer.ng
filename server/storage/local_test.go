@@ -170,6 +170,38 @@ func TestLocalStorage_GetWithRange(t *testing.T) {
 	}
 }
 
+func TestLocalStorage_GetWithUnsatisfiedRange(t *testing.T) {
+	basedir := t.TempDir()
+	storage, err := NewLocalStorage(basedir, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatalf("failed to create storage: %v", err)
+	}
+
+	ctx := context.Background()
+	token := "testtoken"
+	filename := "testfile.txt"
+	content := []byte("0123456789")
+
+	err = storage.Put(ctx, token, filename, bytes.NewReader(content), "text/plain", uint64(len(content)))
+	if err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+
+	rng := &Range{Start: uint64(len(content)), Limit: 0}
+	reader, contentLength, err := storage.Get(ctx, token, filename, rng)
+	if err != nil {
+		t.Fatalf("Get with range failed: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+
+	if contentLength != uint64(len(content)) {
+		t.Errorf("expected original content length %d, got %d", len(content), contentLength)
+	}
+	if rng.ContentRange() != "" {
+		t.Errorf("expected unsatisfied range, got content-range %q", rng.ContentRange())
+	}
+}
+
 func TestLocalStorage_IsRangeSupported(t *testing.T) {
 	storage, err := NewLocalStorage(t.TempDir(), log.New(io.Discard, "", 0))
 	if err != nil {

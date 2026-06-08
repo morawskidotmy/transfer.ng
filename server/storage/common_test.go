@@ -137,6 +137,13 @@ func TestRange_AcceptLength(t *testing.T) {
 			expectedCR:     "",
 		},
 		{
+			name:           "start at content length",
+			rng:            Range{Start: 1000, Limit: 0},
+			contentLength:  1000,
+			expectedLength: 1000,
+			expectedCR:     "",
+		},
+		{
 			name:           "limit exceeds remaining content",
 			rng:            Range{Start: 800, Limit: 500},
 			contentLength:  1000,

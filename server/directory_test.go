@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -59,6 +60,87 @@ func (s *suiteDirectory) TestSingleUploadCreatesDirectory(c *C) {
 	c.Assert(w.Code, Equals, http.StatusOK)
 	c.Assert(w.Header().Get("X-Upload-Token"), Not(Equals), "")
 	c.Assert(w.Header().Get("X-Url-Directory"), Not(Equals), "")
+}
+
+func (s *suiteDirectory) TestMultipartUploadUsesCompressionPipeline(c *C) {
+	store, err := storage.NewLocalStorage(c.MkDir(), log.New(io.Discard, "", 0))
+	c.Assert(err, IsNil)
+
+	srvr, err := New(
+		UseStorage(store),
+		Logger(log.New(io.Discard, "", 0)),
+		RandomTokenLength(10),
+		TempPath(c.MkDir()),
+		CompressionThreshold(1),
+	)
+	c.Assert(err, IsNil)
+	srvr.htmlTemplates = initHTMLTemplates()
+	srvr.textTemplates = initTextTemplates()
+	srvr.loadTemplatesFromAssets()
+	router := mux.NewRouter()
+	srvr.setupRoutes(router, http.NotFoundHandler())
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "hello.txt")
+	c.Assert(err, IsNil)
+	_, err = part.Write([]byte("hello compressed world"))
+	c.Assert(err, IsNil)
+	c.Assert(writer.Close(), IsNil)
+
+	req := httptest.NewRequest("POST", "http://example.com/", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	c.Assert(w.Code, Equals, http.StatusOK)
+	dirToken := strings.Trim(strings.TrimPrefix(w.Header().Get("X-Url-Directory"), "http://example.com/"), "/")
+	meta, err := srvr.checkMetadata(req.Context(), dirToken, "hello.txt", false)
+	c.Assert(err, IsNil)
+	c.Assert(meta.Compressed, Equals, true)
+}
+
+func (s *suiteDirectory) TestPreviewEscapesNestedDownloadURL(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/dir/file%20name.txt", strings.NewReader("hello"))
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirToken := strings.Trim(strings.TrimPrefix(w.Header().Get("X-Url-Directory"), "http://example.com/"), "/")
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/dir/file%20name.txt", nil)
+	req.Header.Set("Accept", "text/html")
+	w = s.do(req)
+
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Body.String(), Matches, `(?s).*http://example\.com/get/`+dirToken+`/dir/file%20name\.txt.*`)
+}
+
+func (s *suiteDirectory) TestUnsatisfiedRangeReturnsRequestedRangeNotSatisfiable(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/range.txt", strings.NewReader("hello"))
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirToken := strings.Trim(strings.TrimPrefix(w.Header().Get("X-Url-Directory"), "http://example.com/"), "/")
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/range.txt", nil)
+	req.Header.Set("Range", "bytes=5-")
+	w = s.do(req)
+
+	c.Assert(w.Code, Equals, http.StatusRequestedRangeNotSatisfiable)
+	c.Assert(w.Header().Get("Content-Range"), Equals, "bytes */5")
+}
+
+func (s *suiteDirectory) TestEncryptedTextPreviewDoesNotRenderCiphertext(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/secret.txt", strings.NewReader("hidden text"))
+	req.Header.Set("X-Encrypt-Password", "secret")
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirToken := strings.Trim(strings.TrimPrefix(w.Header().Get("X-Url-Directory"), "http://example.com/"), "/")
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/secret.txt", nil)
+	req.Header.Set("Accept", "text/html")
+	w = s.do(req)
+
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Body.String(), Not(Matches), `(?s).*BEGIN PGP MESSAGE.*`)
 }
 
 // TestAddFileToDirectory verifies files can be added to an existing directory

@@ -310,8 +310,11 @@ func (s *Server) previewHandler(w http.ResponseWriter, r *http.Request) {
 
 	templatePath := s.getPreviewTemplate(contentType, metadata.Compressed)
 	var content htmlTemplate.HTML
+	if metadata.Encrypted {
+		templatePath = "download.html"
+	}
 
-	if !metadata.Compressed && strings.HasPrefix(contentType, "text/") {
+	if !metadata.Encrypted && !metadata.Compressed && strings.HasPrefix(contentType, "text/") {
 		content, templatePath, err = s.getTextContent(r.Context(), token, filename, contentType)
 		if err != nil {
 			s.respondError(w, http.StatusInternalServerError, "Could not retrieve file.", "preview: %v", err)
@@ -319,9 +322,10 @@ func (s *Server) previewHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	relativeURL, _ := url.Parse(path.Join(s.proxyPath, token, filename))
+	escapedPath := escapePathForURL(filename)
+	relativeURL, _ := url.Parse(path.Join(s.proxyPath, token, escapedPath))
 	resolvedURL := resolveURL(r, relativeURL, s.proxyPort)
-	relativeURLGet, _ := url.Parse(path.Join(s.proxyPath, getPathPart, token, filename))
+	relativeURLGet, _ := url.Parse(path.Join(s.proxyPath, getPathPart, token, escapedPath))
 	resolvedURLGet := resolveURL(r, relativeURLGet, s.proxyPort)
 
 	png, err := qrcode.Encode(resolvedURL, qrcode.High, 150)
@@ -521,6 +525,8 @@ func (s *Server) postHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error occurred copying to output stream", http.StatusInternalServerError)
 		return
 	}
+	// Remove any temp files multipart parsing spilled to disk.
+	defer func() { _ = r.MultipartForm.RemoveAll() }()
 
 	// All files in a single POST are grouped into one directory so they can be
 	// shared together and more files can be added later with the upload token.
@@ -569,6 +575,7 @@ func (s *Server) processUploadFile(w http.ResponseWriter, r *http.Request, token
 		http.Error(w, "Could not process upload.", http.StatusInternalServerError)
 		return false
 	}
+	defer storage.CloseCheck(f)
 
 	file, err := os.CreateTemp(s.tempPath, "transfer-")
 	if err != nil {
@@ -589,7 +596,7 @@ func (s *Server) processUploadFile(w http.ResponseWriter, r *http.Request, token
 		}
 	}
 
-	if !s.saveFileWithMetadata(w, r, token, filename, contentType, contentLength, file) {
+	if !s.processPutUpload(w, r, token, filename, contentType, contentLength, file) {
 		return false
 	}
 
@@ -636,44 +643,6 @@ func (s *Server) runVirusScan(w http.ResponseWriter, filePath string) bool {
 		http.Error(w, "Clamav prescan found a virus", http.StatusPreconditionFailed)
 		return false
 	}
-	return true
-}
-
-func (s *Server) saveFileWithMetadata(w http.ResponseWriter, r *http.Request, uploadToken, filename, contentType string, contentLength int64, file *os.File) bool {
-	metadata, err := metadataForRequest(contentType, contentLength, s.randomTokenLength, r)
-	if err != nil {
-		s.logger.Printf("saveFileWithMetadata: %v", err)
-		http.Error(w, "Could not generate metadata", http.StatusInternalServerError)
-		return false
-	}
-
-	buffer := &bytes.Buffer{}
-	if err := json.NewEncoder(buffer).Encode(metadata); err != nil {
-		s.logger.Printf("%s", err.Error())
-		http.Error(w, "Could not encode metadata", http.StatusInternalServerError)
-		return false
-	}
-
-	if err := s.storage.Put(r.Context(), uploadToken, fmt.Sprintf("%s.metadata", filename), buffer, "text/json", storage.SafeIntToUint64(buffer.Len())); err != nil {
-		s.logger.Printf("%s", err.Error())
-		http.Error(w, "Could not save metadata", http.StatusInternalServerError)
-		return false
-	}
-
-	s.logger.Printf("Uploading %s %s %d %s", uploadToken, filename, contentLength, contentType)
-
-	reader, err := attachEncryptionReader(file, r.Header.Get("X-Encrypt-Password"))
-	if err != nil {
-		http.Error(w, "Could not crypt file", http.StatusInternalServerError)
-		return false
-	}
-
-	if err = s.storage.Put(r.Context(), uploadToken, filename, reader, contentType, storage.SafeInt64ToUint64(contentLength)); err != nil {
-		s.logger.Printf("upload: backend storage error: %v", err)
-		http.Error(w, "Could not save file.", http.StatusInternalServerError)
-		return false
-	}
-
 	return true
 }
 
@@ -900,13 +869,11 @@ func (s *Server) processPutUpload(w http.ResponseWriter, r *http.Request, putTok
 
 	s.logger.Printf("Uploading %s %s %d %s", putToken, filename, contentLength, contentType)
 
-	encryptedReader, err := attachEncryptionReader(reader, r.Header.Get("X-Encrypt-Password"))
-	if err != nil {
-		http.Error(w, "Could not crypt file", http.StatusInternalServerError)
-		return false
-	}
-
-	finalReader := encryptedReader
+	// Order matters: compress the plaintext first, then encrypt. Downloads
+	// decrypt before decompressing, so the stored layout must be
+	// encrypt(compress(plaintext)). Compressing after encryption would make
+	// encrypted files impossible to decrypt on download.
+	finalReader := reader
 	finalLength := contentLength
 
 	if shouldCompress {
@@ -914,6 +881,13 @@ func (s *Server) processPutUpload(w http.ResponseWriter, r *http.Request, putTok
 			return false
 		}
 	}
+
+	encryptedReader, err := attachEncryptionReader(finalReader, r.Header.Get("X-Encrypt-Password"))
+	if err != nil {
+		http.Error(w, "Could not crypt file", http.StatusInternalServerError)
+		return false
+	}
+	finalReader = encryptedReader
 
 	if err = s.storage.Put(r.Context(), putToken, filename, finalReader, contentType, storage.SafeInt64ToUint64(finalLength)); err != nil {
 		s.logger.Printf("Error putting new file: %s", err.Error())
@@ -1465,7 +1439,7 @@ func (s *Server) redirectToSubdirectory(w http.ResponseWriter, r *http.Request, 
 	for _, f := range idx.Files {
 		if strings.HasPrefix(f.Name, prefix) {
 			// #nosec G710 -- token is server-generated, filename is sanitized
-			http.Redirect(w, r, path.Join(s.proxyPath, token, filename)+"/", http.StatusMovedPermanently)
+			http.Redirect(w, r, r.URL.Path+"/", http.StatusMovedPermanently)
 			return true
 		}
 	}
@@ -1473,77 +1447,139 @@ func (s *Server) redirectToSubdirectory(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *Server) getHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-
-	action := vars["action"]
-	token := vars["token"]
-	filename := sanitizePath(vars["filename"])
-
-	if err := validateTokenAndFilename(token, filename); err != nil {
-		s.respondError(w, http.StatusBadRequest, err.Error(), "")
+	action, token, filename, ok := s.getRequestParts(w, r)
+	if !ok {
 		return
 	}
 
-	metadata, err := s.checkMetadata(r.Context(), token, filename, true)
-	if err != nil {
-		if action == "" && s.redirectToSubdirectory(w, r, token, filename) {
-			return
-		}
-		s.respondError(w, http.StatusNotFound, "", "Error metadata: %s", err.Error())
+	metadata, ok := s.getMetadataForDownload(w, r, action, token, filename)
+	if !ok {
 		return
 	}
 
-	rng := s.parseRange(r)
-	contentType := metadata.ContentType
-
-	reader, contentLength, err := s.storage.Get(r.Context(), token, filename, rng)
-	if s.storage.IsNotExist(err) {
-		s.respondError(w, http.StatusNotFound, "", "")
-		return
-	}
-	if err != nil {
-		s.respondError(w, http.StatusInternalServerError, "Could not retrieve file.", "%v", err)
+	password := r.Header.Get("X-Decrypt-Password")
+	contentType := metadata.contentTypeForPassword(password)
+	rng := metadata.rangeForRequest(s.parseRange(r), password)
+	reader, contentLength, ok := s.getReaderForDownload(w, r, token, filename, rng)
+	if !ok {
 		return
 	}
 	defer storage.CloseCheck(reader)
 
 	reader = s.handleRangeHeaders(w, reader, rng)
-
 	disposition := s.getDisposition(action)
 
-	if action == "inline" && strings.TrimSpace(contentType) == "" {
-		contentType = "text/plain; charset=utf-8"
-	}
-
-	remainingDownloads, remainingDays := metadata.remainingLimitHeaderValues()
-	s.setCommonHeaders(w, filename, disposition, remainingDownloads, remainingDays)
-
-	password := r.Header.Get("X-Decrypt-Password")
+	var err error
 	reader, err = attachDecryptionReader(reader, password)
 	if err != nil {
-		http.Error(w, "Could not decrypt file", http.StatusInternalServerError)
+		http.Error(w, "Could not decrypt file (wrong or missing password?)", http.StatusUnauthorized)
 		return
 	}
 
 	reader, contentLength = s.handleDecryptionAndCompression(reader, contentLength, &metadata, password)
-
-	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Content-Length", strconv.FormatUint(contentLength, 10))
-	w.Header().Set("Vary", "Accept, Range, Referer, X-Decrypt-Password")
-
-	if rng != nil && rng.ContentRange() != "" {
-		w.WriteHeader(http.StatusPartialContent)
-	}
-
-	if disposition == "inline" && contentTypeMayContainXSS(contentType) {
-		reader = io.NopCloser(bluemonday.UGCPolicy().SanitizeReader(reader))
-	}
+	s.setDownloadResponseHeaders(w, filename, action, disposition, contentType, contentLength, &metadata, rng)
+	reader = sanitizeInlineReader(reader, disposition, contentType)
 
 	if _, err = io.Copy(w, reader); err != nil {
 		s.logger.Printf("%s", err.Error())
 		http.Error(w, "Error occurred copying to output stream", http.StatusInternalServerError)
 		return
 	}
+}
+
+func (s *Server) getRequestParts(w http.ResponseWriter, r *http.Request) (action, token, filename string, ok bool) {
+	vars := mux.Vars(r)
+	action = vars["action"]
+	token = vars["token"]
+	filename = sanitizePath(vars["filename"])
+
+	if err := validateTokenAndFilename(token, filename); err != nil {
+		s.respondError(w, http.StatusBadRequest, err.Error(), "")
+		return "", "", "", false
+	}
+
+	return action, token, filename, true
+}
+
+func (s *Server) getMetadataForDownload(w http.ResponseWriter, r *http.Request, action, token, filename string) (metadata, bool) {
+	metadata, err := s.checkMetadata(r.Context(), token, filename, true)
+	if err == nil {
+		return metadata, true
+	}
+	if action == "" && s.redirectToSubdirectory(w, r, token, filename) {
+		return metadata, false
+	}
+	s.respondError(w, http.StatusNotFound, "", "Error metadata: %s", err.Error())
+	return metadata, false
+}
+
+func (metadata metadata) contentTypeForPassword(password string) string {
+	// When serving a decrypted file, restore the original content type that was
+	// recorded at upload time (metadata.ContentType is forced to text/plain for
+	// encrypted blobs).
+	if metadata.Encrypted && password != "" && metadata.DecryptedContentType != "" {
+		return metadata.DecryptedContentType
+	}
+	return metadata.ContentType
+}
+
+func (metadata metadata) rangeForRequest(rng *storage.Range, password string) *storage.Range {
+	// Range requests cannot be served over transformed content: the stored bytes
+	// differ from what the client receives, so byte offsets would be meaningless.
+	if metadata.Compressed || (metadata.Encrypted && password != "") {
+		return nil
+	}
+	return rng
+}
+
+func (s *Server) getReaderForDownload(w http.ResponseWriter, r *http.Request, token, filename string, rng *storage.Range) (io.ReadCloser, uint64, bool) {
+	reader, contentLength, err := s.storage.Get(r.Context(), token, filename, rng)
+	if s.storage.IsNotExist(err) {
+		s.respondError(w, http.StatusNotFound, "", "")
+		return nil, 0, false
+	}
+	if err != nil {
+		s.respondError(w, http.StatusInternalServerError, "Could not retrieve file.", "%v", err)
+		return nil, 0, false
+	}
+	if rng != nil && s.storage.IsRangeSupported() && rng.ContentRange() == "" {
+		storage.CloseCheck(reader)
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", contentLength))
+		s.respondError(w, http.StatusRequestedRangeNotSatisfiable, "", "")
+		return nil, 0, false
+	}
+	return reader, contentLength, true
+}
+
+func (s *Server) setDownloadResponseHeaders(w http.ResponseWriter, filename, action, disposition, contentType string, contentLength uint64, metadata *metadata, rng *storage.Range) {
+	if action == "inline" && strings.TrimSpace(contentType) == "" {
+		contentType = "text/plain; charset=utf-8"
+	}
+
+	remainingDownloads, remainingDays := metadata.remainingLimitHeaderValues()
+	s.setCommonHeaders(w, filename, disposition, remainingDownloads, remainingDays)
+	w.Header().Set("Vary", "Accept, Range, Referer, X-Decrypt-Password")
+	w.Header().Set("Content-Type", contentType)
+
+	if !shouldSanitizeInline(disposition, contentType) {
+		w.Header().Set("Content-Length", strconv.FormatUint(contentLength, 10))
+	}
+	if rng != nil && rng.ContentRange() != "" {
+		w.WriteHeader(http.StatusPartialContent)
+	}
+}
+
+func shouldSanitizeInline(disposition, contentType string) bool {
+	// Sanitizing inline HTML rewrites the body, so the stored content length no
+	// longer matches what we send; let the server use chunked encoding instead.
+	return disposition == "inline" && contentTypeMayContainXSS(contentType)
+}
+
+func sanitizeInlineReader(reader io.ReadCloser, disposition, contentType string) io.ReadCloser {
+	if shouldSanitizeInline(disposition, contentType) {
+		return io.NopCloser(bluemonday.UGCPolicy().SanitizeReader(reader))
+	}
+	return reader
 }
 
 func (s *Server) parseRange(r *http.Request) *storage.Range {

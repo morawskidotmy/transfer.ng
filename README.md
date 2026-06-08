@@ -329,23 +329,29 @@ transfer() {
         return 1
     fi
 
-    upload_one() {
-        local f="$1"
-        local rel="${f#./}"
-        local url="${dir_url}${rel}"
-        if curl --silent --show-error --fail \
-                -H "X-Upload-Token: $upload_token" \
-                --upload-file "$f" "$url" >/dev/null; then
-            echo "$url"
-        else
-            echo "FAILED: $f" >&2
-            return 1
+    # Upload in parallel batches (portable across bash and zsh — no
+    # export -f, which zsh does not support).
+    local max=8 count=0
+    local f rel url
+    for f in "${files[@]}"; do
+        rel="${f#./}"
+        url="${dir_url}${rel}"
+        (
+            if curl --silent --show-error --fail \
+                    -H "X-Upload-Token: $upload_token" \
+                    --upload-file "$f" "$url" >/dev/null; then
+                echo "$url"
+            else
+                echo "FAILED: $f" >&2
+            fi
+        ) &
+        count=$((count + 1))
+        if [ "$count" -ge "$max" ]; then
+            wait
+            count=0
         fi
-    }
-    export -f upload_one
-    export upload_token dir_url
-
-    printf '%s\0' "${files[@]}" | xargs -0 -P 8 -I {} bash -c 'upload_one "$@"' _ {}
+    done
+    wait
 
     echo "Directory: $dir_url"
 }

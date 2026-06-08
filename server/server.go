@@ -775,8 +775,8 @@ func (s *Server) setupRoutes(r *mux.Router, staticHandler http.Handler) {
 		postHandlerFn = ratelimit.Request(realIPKeyFn).Rate(s.rateLimitUploads, 60*time.Second).LimitBy(memory.New())(http.HandlerFunc(s.postHandler))
 	}
 
-	r.HandleFunc("/{token}/{filename:.+}", getHandlerFn).Methods("GET")
 	r.HandleFunc("/{action:(?:download|get|inline)}/{token}/{filename:.+}", getHandlerFn).Methods("GET")
+	r.HandleFunc("/{token}/{filename:.+}", getHandlerFn).Methods("GET")
 	r.HandleFunc("/{filename}/virustotal", s.virusTotalHandler).Methods("PUT")
 	r.HandleFunc("/{filename}/scan", s.scanHandler).Methods("PUT")
 	r.HandleFunc("/put/{filename:.+}", s.basicAuthHandler(putHandlerFn)).Methods("PUT")
