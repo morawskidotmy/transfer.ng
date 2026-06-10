@@ -396,7 +396,7 @@ func (s *suiteDirectory) TestDirectoryZipArchive(c *C) {
 	req.Header.Set("X-Upload-Token", uploadToken)
 	c.Assert(s.do(req).Code, Equals, http.StatusOK)
 
-	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/.zip", nil)
+	req = httptest.NewRequest("GET", "http://example.com/zip/"+dirToken+"/", nil)
 	w = s.do(req)
 	c.Assert(w.Code, Equals, http.StatusOK)
 	c.Assert(w.Header().Get("Content-Type"), Equals, "application/zip")
@@ -420,14 +420,15 @@ func (s *suiteDirectory) TestZipHandlerClosesArchive(c *C) {
 	dirURL := w.Header().Get("X-Url-Directory")
 	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
 
-	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/archive.txt.zip", nil)
+	req = httptest.NewRequest("GET", "http://example.com/archive/zip/"+dirToken+"/archive.txt", nil)
 	w = s.do(req)
 	c.Assert(w.Code, Equals, http.StatusOK)
 
 	zr, err := zip.NewReader(bytes.NewReader(w.Body.Bytes()), int64(w.Body.Len()))
 	c.Assert(err, IsNil)
-	c.Assert(len(zr.File), Equals, 1)
+	c.Assert(len(zr.File), Equals, 2)
 	c.Assert(zr.File[0].Name, Equals, "archive.txt")
+	c.Assert(zr.File[1].Name, Equals, "_transfer-ng-manifest.txt")
 }
 
 func (s *suiteDirectory) TestEncryptedDirectoryZipRequiresPassword(c *C) {
@@ -439,20 +440,21 @@ func (s *suiteDirectory) TestEncryptedDirectoryZipRequiresPassword(c *C) {
 	dirURL := w.Header().Get("X-Url-Directory")
 	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
 
-	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/.zip", nil)
+	// Without password, should return 400 because no files are downloadable
+	req = httptest.NewRequest("GET", "http://example.com/zip/"+dirToken+"/", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusBadRequest)
+
+	// With password, should return 200 with the file
+	req = httptest.NewRequest("GET", "http://example.com/zip/"+dirToken+"/", nil)
+	req.Header.Set("X-Decrypt-Password", "secret")
 	w = s.do(req)
 	c.Assert(w.Code, Equals, http.StatusOK)
 	zr, err := zip.NewReader(bytes.NewReader(w.Body.Bytes()), int64(w.Body.Len()))
 	c.Assert(err, IsNil)
-	c.Assert(len(zr.File), Equals, 0)
-
-	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/.zip", nil)
-	req.Header.Set("X-Decrypt-Password", "secret")
-	w = s.do(req)
-	c.Assert(w.Code, Equals, http.StatusOK)
-	zr, err = zip.NewReader(bytes.NewReader(w.Body.Bytes()), int64(w.Body.Len()))
-	c.Assert(err, IsNil)
-	c.Assert(len(zr.File), Equals, 1)
+	c.Assert(len(zr.File), Equals, 2)
+	c.Assert(zr.File[0].Name, Equals, "secret.txt")
+	c.Assert(zr.File[1].Name, Equals, "_transfer-ng-manifest.txt")
 	rc, err := zr.File[0].Open()
 	c.Assert(err, IsNil)
 	defer func() { _ = rc.Close() }()
@@ -827,7 +829,7 @@ func (s *suiteDirectory) TestArchiveRouteMatches(c *C) {
 	dirURL := w.Header().Get("X-Url-Directory")
 	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
 
-	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/archive-test.txt.zip", nil)
+	req = httptest.NewRequest("GET", "http://example.com/archive/zip/"+dirToken+"/archive-test.txt", nil)
 	w = s.do(req)
 	c.Assert(w.Code, Equals, http.StatusOK)
 	c.Assert(w.Header().Get("Content-Type"), Equals, "application/zip")
@@ -1095,17 +1097,237 @@ func (s *suiteDirectory) TestHeadRoutesForDirectoryArchives(c *C) {
 	dirURL := w.Header().Get("X-Url-Directory")
 	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
 
-	// HEAD /{token}/.zip
-	req = httptest.NewRequest("HEAD", "http://example.com/"+dirToken+"/.zip", nil)
+	// HEAD /zip/{token}/
+	req = httptest.NewRequest("HEAD", "http://example.com/zip/"+dirToken+"/", nil)
 	w = s.do(req)
 	c.Assert(w.Code, Equals, http.StatusOK)
 	c.Assert(w.Header().Get("Content-Type"), Equals, "application/zip")
 	c.Assert(w.Header().Get("Content-Disposition"), Matches, ".*\\.zip.*")
 
-	// HEAD /{token}/.tar.gz
-	req = httptest.NewRequest("HEAD", "http://example.com/"+dirToken+"/.tar.gz", nil)
+	// HEAD /tar.gz/{token}/
+	req = httptest.NewRequest("HEAD", "http://example.com/tar.gz/"+dirToken+"/", nil)
 	w = s.do(req)
 	c.Assert(w.Code, Equals, http.StatusOK)
 	c.Assert(w.Header().Get("Content-Type"), Equals, "application/x-gzip")
 	c.Assert(w.Header().Get("Content-Disposition"), Matches, ".*\\.tar\\.gz.*")
+}
+
+// TestUploadedZipFileDownload verifies that a file named .zip can be uploaded
+// and downloaded directly without being intercepted by archive routes.
+func (s *suiteDirectory) TestUploadedZipFileDownload(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/backup.zip", strings.NewReader("zip file content"))
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirURL := w.Header().Get("X-Url-Directory")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	// Download the .zip file directly
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/backup.zip", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Body.String(), Equals, "zip file content")
+}
+
+// TestDirectoryHTMLContainsArchiveButtons verifies that the directory listing
+// HTML page contains download buttons for zip and tar.gz archives.
+func (s *suiteDirectory) TestDirectoryHTMLContainsArchiveButtons(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/test.txt", strings.NewReader("test content"))
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirURL := w.Header().Get("X-Url-Directory")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/", nil)
+	req.Header.Set("Accept", "text/html")
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	body := w.Body.String()
+
+	c.Assert(strings.Contains(body, "[ DOWNLOAD FULL DIRECTORY AS ZIP ]"), Equals, true)
+	c.Assert(strings.Contains(body, "[ DOWNLOAD FULL DIRECTORY AS TAR.GZ ]"), Equals, true)
+	c.Assert(strings.Contains(body, "/zip/"+dirToken+"/"), Equals, true)
+	c.Assert(strings.Contains(body, "/tar.gz/"+dirToken+"/"), Equals, true)
+}
+
+// TestEmptyDirectoryHTMLNoArchiveButtons verifies that empty directories
+// do not show archive download buttons.
+func (s *suiteDirectory) TestEmptyDirectoryHTMLNoArchiveButtons(c *C) {
+	req := httptest.NewRequest("POST", "http://example.com/dir", nil)
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirURL := w.Header().Get("X-Url-Directory")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/", nil)
+	req.Header.Set("Accept", "text/html")
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	body := w.Body.String()
+
+	c.Assert(strings.Contains(body, "[ DOWNLOAD FULL DIRECTORY AS ZIP ]"), Equals, false)
+	c.Assert(strings.Contains(body, "[ DOWNLOAD FULL DIRECTORY AS TAR.GZ ]"), Equals, false)
+}
+
+// TestDirectoryArchiveMaxDownloads verifies that archive downloads correctly
+// increment download counts without double-counting from preflight checks.
+func (s *suiteDirectory) TestDirectoryArchiveMaxDownloads(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/limited.txt", strings.NewReader("limited content"))
+	req.Header.Set("Max-Downloads", "1")
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirURL := w.Header().Get("X-Url-Directory")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	// First archive download should succeed
+	req = httptest.NewRequest("GET", "http://example.com/zip/"+dirToken+"/", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Header().Get("Content-Type"), Equals, "application/zip")
+
+	zr, err := zip.NewReader(bytes.NewReader(w.Body.Bytes()), int64(w.Body.Len()))
+	c.Assert(err, IsNil)
+	c.Assert(len(zr.File), Equals, 2)
+	c.Assert(zr.File[0].Name, Equals, "limited.txt")
+	c.Assert(zr.File[1].Name, Equals, "_transfer-ng-manifest.txt")
+
+	// Second archive download should fail - file is exhausted
+	req = httptest.NewRequest("GET", "http://example.com/zip/"+dirToken+"/", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusBadRequest)
+	c.Assert(w.Body.String(), Equals, "No downloadable files in directory\n")
+}
+
+// TestDirectoryArchiveHeadMatchesGet verifies that HEAD requests return the
+// same status as GET requests would for archive endpoints.
+func (s *suiteDirectory) TestDirectoryArchiveHeadMatchesGet(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/secret.txt", strings.NewReader("secret content"))
+	req.Header.Set("X-Encrypt-Password", "secret")
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirURL := w.Header().Get("X-Url-Directory")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	// HEAD without password should return 400
+	req = httptest.NewRequest("HEAD", "http://example.com/zip/"+dirToken+"/", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusBadRequest)
+
+	// GET without password should also return 400
+	req = httptest.NewRequest("GET", "http://example.com/zip/"+dirToken+"/", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusBadRequest)
+
+	// HEAD with password should return 200
+	req = httptest.NewRequest("HEAD", "http://example.com/zip/"+dirToken+"/", nil)
+	req.Header.Set("X-Decrypt-Password", "secret")
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Header().Get("Content-Type"), Equals, "application/zip")
+
+	// GET with password should also return 200
+	req = httptest.NewRequest("GET", "http://example.com/zip/"+dirToken+"/", nil)
+	req.Header.Set("X-Decrypt-Password", "secret")
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+}
+
+// TestDirectoryArchiveNestedOnly verifies that archive buttons appear even
+// when a directory contains only subdirectories (no immediate files).
+func (s *suiteDirectory) TestDirectoryArchiveNestedOnly(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/subdir/nested.txt", strings.NewReader("nested content"))
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirURL := w.Header().Get("X-Url-Directory")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	// Root directory listing should show archive buttons even though
+	// it has no immediate files (only subdirectories)
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/", nil)
+	req.Header.Set("Accept", "text/html")
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	body := w.Body.String()
+
+	c.Assert(strings.Contains(body, "[ DOWNLOAD FULL DIRECTORY AS ZIP ]"), Equals, true)
+	c.Assert(strings.Contains(body, "[ DOWNLOAD FULL DIRECTORY AS TAR.GZ ]"), Equals, true)
+	c.Assert(strings.Contains(body, "/zip/"+dirToken+"/"), Equals, true)
+	c.Assert(strings.Contains(body, "/tar.gz/"+dirToken+"/"), Equals, true)
+
+	// Archive should contain the nested file
+	req = httptest.NewRequest("GET", "http://example.com/zip/"+dirToken+"/", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	zr, err := zip.NewReader(bytes.NewReader(w.Body.Bytes()), int64(w.Body.Len()))
+	c.Assert(err, IsNil)
+	c.Assert(len(zr.File), Equals, 2)
+	c.Assert(zr.File[0].Name, Equals, "subdir/nested.txt")
+	c.Assert(zr.File[1].Name, Equals, "_transfer-ng-manifest.txt")
+}
+
+// TestMultiFileArchiveMaxDownloads verifies that multi-file archive downloads
+// correctly increment download counts without double-counting from preflight.
+func (s *suiteDirectory) TestMultiFileArchiveMaxDownloads(c *C) {
+	// Upload a file with Max-Downloads: 1
+	req := httptest.NewRequest("PUT", "http://example.com/limited.txt", strings.NewReader("limited content"))
+	req.Header.Set("Max-Downloads", "1")
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirURL := w.Header().Get("X-Url-Directory")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	// First multi-file archive download should succeed
+	req = httptest.NewRequest("GET", "http://example.com/archive/zip/"+dirToken+"/limited.txt", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Header().Get("Content-Type"), Equals, "application/zip")
+
+	zr, err := zip.NewReader(bytes.NewReader(w.Body.Bytes()), int64(w.Body.Len()))
+	c.Assert(err, IsNil)
+	c.Assert(len(zr.File), Equals, 2)
+	c.Assert(zr.File[0].Name, Equals, "limited.txt")
+	c.Assert(zr.File[1].Name, Equals, "_transfer-ng-manifest.txt")
+
+	// Second multi-file archive download should fail - file is exhausted
+	req = httptest.NewRequest("GET", "http://example.com/archive/zip/"+dirToken+"/limited.txt", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusBadRequest)
+	c.Assert(w.Body.String(), Equals, "No downloadable files for archive\n")
+}
+
+// TestMultiFileArchiveEncryptedRequiresPassword verifies that multi-file archives
+// with encrypted files require the correct password.
+func (s *suiteDirectory) TestMultiFileArchiveEncryptedRequiresPassword(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/secret.txt", strings.NewReader("secret content"))
+	req.Header.Set("X-Encrypt-Password", "secret")
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirURL := w.Header().Get("X-Url-Directory")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	// Without password, should return 400
+	req = httptest.NewRequest("GET", "http://example.com/archive/zip/"+dirToken+"/secret.txt", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusBadRequest)
+	c.Assert(w.Body.String(), Equals, "No downloadable files for archive\n")
+
+	// With correct password, should return 200
+	req = httptest.NewRequest("GET", "http://example.com/archive/zip/"+dirToken+"/secret.txt", nil)
+	req.Header.Set("X-Decrypt-Password", "secret")
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	zr, err := zip.NewReader(bytes.NewReader(w.Body.Bytes()), int64(w.Body.Len()))
+	c.Assert(err, IsNil)
+	c.Assert(len(zr.File), Equals, 2)
+	c.Assert(zr.File[0].Name, Equals, "secret.txt")
+	c.Assert(zr.File[1].Name, Equals, "_transfer-ng-manifest.txt")
 }

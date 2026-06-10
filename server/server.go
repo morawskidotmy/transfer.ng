@@ -236,6 +236,21 @@ func MaxArchiveFiles(count int) OptionFn {
 	}
 }
 
+// MaxArchiveSize sets the maximum total size (bytes) allowed for an archive download.
+func MaxArchiveSize(size int64) OptionFn {
+	return func(srvr *Server) {
+		srvr.maxArchiveSize = size
+		srvr.maxArchiveSizeSet = true
+	}
+}
+
+// RateLimitArchives sets the rate limit for archive downloads.
+func RateLimitArchives(requests int) OptionFn {
+	return func(srvr *Server) {
+		srvr.rateLimitArchives = requests
+	}
+}
+
 // MaxDirSize sets the maximum total size (bytes) allowed for a single directory.
 func MaxDirSize(size int64) OptionFn {
 	return func(srvr *Server) {
@@ -445,8 +460,12 @@ type Server struct {
 
 	compressionThreshold int64
 	maxArchiveFiles      int
+	maxArchiveSize       int64 // Maximum total size of files in an archive (0 = unlimited)
+	maxArchiveSizeSet    bool  // Whether maxArchiveSize was explicitly configured
 	maxDirSize           int64 // Maximum total size of files in a directory (0 = unlimited)
 	maxDirFiles          int   // Maximum number of files in a directory (0 = unlimited)
+
+	rateLimitArchives int // Rate limit for archive downloads (requests per minute)
 
 	readHeaderTimeout time.Duration
 	readTimeout       time.Duration
@@ -462,6 +481,10 @@ func New(options ...OptionFn) (*Server, error) {
 
 	for _, optionFn := range options {
 		optionFn(s)
+	}
+
+	if !s.maxArchiveSizeSet && s.maxUploadSize > 0 {
+		s.maxArchiveSize = s.maxUploadSize * 1024
 	}
 
 	tokenA, err := token(s.randomTokenLength)
@@ -741,16 +764,53 @@ func (s *Server) setupRoutes(r *mux.Router, staticHandler http.Handler) {
 	r.HandleFunc("/", s.viewHandler).Methods("GET")
 
 	// Directory-level GET routes must come before catch-all file routes
-	r.HandleFunc("/{token}/.zip", s.dirZipHandler).Methods("GET")
-	r.HandleFunc("/{token}/.tar.gz", s.dirTarGzHandler).Methods("GET")
-	r.HandleFunc("/{token}/.zip", s.dirZipHeadHandler).Methods("HEAD")
-	r.HandleFunc("/{token}/.tar.gz", s.dirTarGzHeadHandler).Methods("HEAD")
+	// Archive routes with optional subpath for scoped downloads
+	// Shared rate limiter for all archive endpoints
+	var archiveLimiter func(http.Handler) http.Handler
+	if s.rateLimitArchives > 0 {
+		realIPKeyFn := func(r *http.Request) string {
+			return realip.FromRequest(r)
+		}
+		archiveLimiter = func(h http.Handler) http.Handler {
+			return ratelimit.Request(realIPKeyFn).Rate(s.rateLimitArchives, 60*time.Second).LimitBy(memory.New())(h)
+		}
+	}
+
+	wrapArchive := func(h http.Handler) http.Handler {
+		if archiveLimiter != nil {
+			return archiveLimiter(h)
+		}
+		return h
+	}
+
+	dirZipHandlerFn := wrapArchive(http.HandlerFunc(s.dirZipHandler))
+	dirTarGzHandlerFn := wrapArchive(http.HandlerFunc(s.dirTarGzHandler))
+	dirZipHeadHandlerFn := wrapArchive(http.HandlerFunc(s.dirZipHeadHandler))
+	dirTarGzHeadHandlerFn := wrapArchive(http.HandlerFunc(s.dirTarGzHeadHandler))
+
+	r.Handle("/zip/{token}/{subpath:.*}", dirZipHandlerFn).Methods("GET")
+	r.Handle("/zip/{token}/", dirZipHandlerFn).Methods("GET")
+	r.Handle("/zip/{token}", dirZipHandlerFn).Methods("GET")
+	r.Handle("/tar.gz/{token}/{subpath:.*}", dirTarGzHandlerFn).Methods("GET")
+	r.Handle("/tar.gz/{token}/", dirTarGzHandlerFn).Methods("GET")
+	r.Handle("/tar.gz/{token}", dirTarGzHandlerFn).Methods("GET")
+	r.Handle("/zip/{token}/{subpath:.*}", dirZipHeadHandlerFn).Methods("HEAD")
+	r.Handle("/zip/{token}/", dirZipHeadHandlerFn).Methods("HEAD")
+	r.Handle("/zip/{token}", dirZipHeadHandlerFn).Methods("HEAD")
+	r.Handle("/tar.gz/{token}/{subpath:.*}", dirTarGzHeadHandlerFn).Methods("HEAD")
+	r.Handle("/tar.gz/{token}/", dirTarGzHeadHandlerFn).Methods("HEAD")
+	r.Handle("/tar.gz/{token}", dirTarGzHeadHandlerFn).Methods("HEAD")
 	r.HandleFunc("/{token}/", s.listDirectoryHandler).Methods("GET")
 	r.HandleFunc("/{token}", s.listDirectoryHandler).Methods("GET")
 	r.HandleFunc("/{token}/{subpath:.+}/", s.listDirectoryHandler).Methods("GET")
-	r.HandleFunc("/{files:.*}.zip", s.zipHandler).Methods("GET")
-	r.HandleFunc("/{files:.*}.tar", s.tarHandler).Methods("GET")
-	r.HandleFunc("/{files:.*}.tar.gz", s.tarGzHandler).Methods("GET")
+
+	// Multi-file archive routes
+	zipHandlerFn := wrapArchive(http.HandlerFunc(s.zipHandler))
+	tarHandlerFn := wrapArchive(http.HandlerFunc(s.tarHandler))
+	tarGzHandlerFn := wrapArchive(http.HandlerFunc(s.tarGzHandler))
+	r.Handle("/archive/zip/{files:.*}", zipHandlerFn).Methods("GET")
+	r.Handle("/archive/tar/{files:.*}", tarHandlerFn).Methods("GET")
+	r.Handle("/archive/tar.gz/{files:.*}", tarGzHandlerFn).Methods("GET")
 
 	// File routes with nested path support
 	r.HandleFunc("/{token}/{filename:.+}", s.headHandler).Methods("HEAD")

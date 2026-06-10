@@ -372,6 +372,18 @@ var globalFlags = []cli.Flag{
 		EnvVars: []string{"MAX_ARCHIVE_FILES"},
 	},
 	&cli.StringFlag{
+		Name:    "max-archive-size",
+		Usage:   "max total size of files in an archive download (e.g. 5g, 500m); 0 means use max-upload-size",
+		Value:   "0",
+		EnvVars: []string{"MAX_ARCHIVE_SIZE"},
+	},
+	&cli.IntFlag{
+		Name:    "rate-limit-archives",
+		Usage:   "archive download requests per minute",
+		Value:   0,
+		EnvVars: []string{"RATE_LIMIT_ARCHIVES"},
+	},
+	&cli.StringFlag{
 		Name:    "max-dir-size",
 		Usage:   "rolling max total size of files in a directory (e.g. 5g, 500m); oldest files are deleted on new upload. 0 means unlimited",
 		Value:   "0",
@@ -487,40 +499,36 @@ func addBasicOptions(c *cli.Context, options *[]server.OptionFn, logger *log.Log
 		*options = append(*options, server.MaxUploadSize(v))
 	}
 
-	if v := c.Int("rate-limit"); v > 0 {
-		*options = append(*options, server.RateLimit(v))
-	}
-
-	if v := c.Int("rate-limit-uploads"); v > 0 {
-		*options = append(*options, server.RateLimitUploads(v))
-	}
+	addIntOption(c, options, "rate-limit", server.RateLimit)
+	addIntOption(c, options, "rate-limit-uploads", server.RateLimitUploads)
+	addIntOption(c, options, "rate-limit-archives", server.RateLimitArchives)
 
 	*options = append(*options, server.RandomTokenLength(c.Int("random-token-length")))
 
-	if v := c.String("compress-large"); v != "" {
-		if bytes, err := parseSize(v); err == nil {
-			*options = append(*options, server.CompressionThreshold(bytes))
-		}
-	}
-
-	if v := c.Int("max-archive-files"); v > 0 {
-		*options = append(*options, server.MaxArchiveFiles(v))
-	}
-
-	if v := c.String("max-dir-size"); v != "" && v != "0" {
-		if bytes, err := parseSize(v); err == nil {
-			*options = append(*options, server.MaxDirSize(bytes))
-		}
-	}
-
-	if v := c.Int("max-dir-files"); v > 0 {
-		*options = append(*options, server.MaxDirFiles(v))
-	}
+	addSizeOption(c, options, "compress-large", server.CompressionThreshold)
+	addIntOption(c, options, "max-archive-files", server.MaxArchiveFiles)
+	addSizeOption(c, options, "max-archive-size", server.MaxArchiveSize)
+	addSizeOption(c, options, "max-dir-size", server.MaxDirSize)
+	addIntOption(c, options, "max-dir-files", server.MaxDirFiles)
 }
 
 func addStringOption(c *cli.Context, options *[]server.OptionFn, flag string, fn func(string) server.OptionFn) {
 	if v := c.String(flag); v != "" {
 		*options = append(*options, fn(v))
+	}
+}
+
+func addIntOption(c *cli.Context, options *[]server.OptionFn, flag string, fn func(int) server.OptionFn) {
+	if v := c.Int(flag); v > 0 {
+		*options = append(*options, fn(v))
+	}
+}
+
+func addSizeOption(c *cli.Context, options *[]server.OptionFn, flag string, fn func(int64) server.OptionFn) {
+	if v := c.String(flag); v != "" && v != "0" {
+		if bytes, err := parseSize(v); err == nil {
+			*options = append(*options, fn(bytes))
+		}
 	}
 }
 

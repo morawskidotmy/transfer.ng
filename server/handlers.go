@@ -1269,8 +1269,8 @@ func (s *Server) parseArchiveFiles(filesSpec string) ([]archiveFileSpec, error) 
 	return specs, nil
 }
 
-func (s *Server) fetchFileForArchive(ctx context.Context, token, filename, password string) (io.ReadCloser, uint64, error) {
-	meta, err := s.checkMetadata(ctx, token, filename, true)
+func (s *Server) fetchFileForArchive(ctx context.Context, token, filename, password string, increaseDownload bool) (io.ReadCloser, uint64, error) {
+	meta, err := s.checkMetadata(ctx, token, filename, increaseDownload)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1309,6 +1309,95 @@ func (s *Server) fetchFileForArchive(ctx context.Context, token, filename, passw
 	return reader, contentLength, nil
 }
 
+// preflightArchiveFile validates if a file can be fetched for archive creation
+// using metadata-first approach. Only opens storage for encrypted files to verify password.
+// Returns true if the file is fetchable, false otherwise.
+func (s *Server) preflightArchiveFile(ctx context.Context, token, filename, password string) bool {
+	meta, err := s.checkMetadata(ctx, token, filename, false)
+	if err != nil {
+		return false
+	}
+
+	if !meta.Encrypted {
+		return true
+	}
+
+	if password == "" {
+		return false
+	}
+
+	reader, _, err := s.storage.Get(ctx, token, filename, nil)
+	if err != nil {
+		return false
+	}
+
+	decryptReader, err := attachDecryptionReader(reader, password)
+	if err != nil {
+		storage.CloseCheck(reader)
+		return false
+	}
+	storage.CloseCheck(decryptReader)
+
+	return true
+}
+
+// preflightArchiveSpecs checks if files in a spec list can be fetched
+// for archive creation without incrementing download counts.
+// Uses metadata-first validation to minimize storage reads.
+// Returns the number of files that can be fetched and their total size.
+func (s *Server) preflightArchiveSpecs(ctx context.Context, specs []archiveFileSpec, password string) (int, int64) {
+	var fetchableCount int
+	var totalSize int64
+	for _, spec := range specs {
+		meta, err := s.checkMetadata(ctx, spec.token, spec.filename, false)
+		if err != nil {
+			continue
+		}
+		if meta.Encrypted && password == "" {
+			continue
+		}
+		if meta.Encrypted {
+			reader, _, err := s.storage.Get(ctx, spec.token, spec.filename, nil)
+			if err != nil {
+				continue
+			}
+			decryptReader, err := attachDecryptionReader(reader, password)
+			if err != nil {
+				storage.CloseCheck(reader)
+				continue
+			}
+			storage.CloseCheck(decryptReader)
+		}
+		fetchableCount++
+		if meta.ContentLength > 0 {
+			totalSize += meta.ContentLength
+		}
+	}
+	return fetchableCount, totalSize
+}
+
+// manifestForSpecs generates manifest content for multi-file archives.
+func manifestForSpecs(specs []archiveFileSpec, addedFiles int, totalSize int64, skippedFiles []string) string {
+	var sb strings.Builder
+	_, _ = sb.WriteString("# transfer.ng Archive Manifest\n")
+	_, _ = fmt.Fprintf(&sb, "Created: %s\n", time.Now().UTC().Format(time.RFC3339))
+	_, _ = fmt.Fprintf(&sb, "Files: %d\n", addedFiles)
+	_, _ = fmt.Fprintf(&sb, "Total Size: %d bytes\n", totalSize)
+	if len(specs) > 0 {
+		_, _ = sb.WriteString("\n# Requested Files:\n")
+		for _, spec := range specs {
+			_, _ = fmt.Fprintf(&sb, "# - %s/%s\n", spec.token, spec.filename)
+		}
+	}
+	if len(skippedFiles) > 0 {
+		_, _ = sb.WriteString("\n# Skipped Files:\n")
+		for _, f := range skippedFiles {
+			_, _ = fmt.Fprintf(&sb, "# - %s\n", f)
+		}
+	}
+	return sb.String()
+}
+
 func (s *Server) zipHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 
@@ -1318,18 +1407,39 @@ func (s *Server) zipHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(specs) == 0 {
+		s.respondError(w, http.StatusBadRequest, "No files specified for archive", "")
+		return
+	}
+
+	password := r.Header.Get("X-Decrypt-Password")
+	fetchableCount, totalSize := s.preflightArchiveSpecs(r.Context(), specs, password)
+	if fetchableCount == 0 {
+		s.respondError(w, http.StatusBadRequest, "No downloadable files for archive", "")
+		return
+	}
+
+	if s.maxArchiveSize > 0 && totalSize > s.maxArchiveSize {
+		s.respondError(w, http.StatusBadRequest, fmt.Sprintf("Archive too large (max %d bytes)", s.maxArchiveSize), "")
+		return
+	}
+
 	zipfilename := fmt.Sprintf("transfersh-%d.zip", time.Now().UnixNano())
 
 	w.Header().Set("Content-Type", "application/zip")
 	commonHeader(w, zipfilename)
 
 	zw := zip.NewWriter(w)
-	password := r.Header.Get("X-Decrypt-Password")
+
+	var addedFiles int
+	var actualTotalSize int64
+	var skippedFiles []string
 
 	for _, spec := range specs {
-		reader, _, err := s.fetchFileForArchive(r.Context(), spec.token, spec.filename, password)
+		reader, contentLength, err := s.fetchFileForArchive(r.Context(), spec.token, spec.filename, password, true)
 		if err != nil {
 			s.logger.Printf("zip: skipping %s/%s: %v", spec.token, spec.filename, err)
+			skippedFiles = append(skippedFiles, fmt.Sprintf("%s/%s", spec.token, spec.filename))
 			continue
 		}
 
@@ -1343,6 +1453,7 @@ func (s *Server) zipHandler(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			storage.CloseCheck(reader)
 			s.logger.Printf("zip: failed to create entry for %s: %v", spec.filename, err)
+			skippedFiles = append(skippedFiles, fmt.Sprintf("%s/%s", spec.token, spec.filename))
 			continue
 		}
 
@@ -1350,8 +1461,23 @@ func (s *Server) zipHandler(w http.ResponseWriter, r *http.Request) {
 		storage.CloseCheck(reader)
 		if err != nil {
 			s.logger.Printf("zip: failed to copy %s: %v", spec.filename, err)
+			skippedFiles = append(skippedFiles, fmt.Sprintf("%s/%s", spec.token, spec.filename))
 			continue
 		}
+		addedFiles++
+		actualTotalSize += storage.SafeUint64ToInt64(contentLength)
+	}
+
+	// Add manifest file
+	manifestContent := manifestForSpecs(specs, addedFiles, actualTotalSize, skippedFiles)
+	manifestHeader := &zip.FileHeader{
+		Name:     "_transfer-ng-manifest.txt",
+		Method:   zip.Store,
+		Modified: time.Now().UTC(),
+	}
+	mw, err := zw.CreateHeader(manifestHeader)
+	if err == nil {
+		_, _ = mw.Write([]byte(manifestContent))
 	}
 
 	if err := zw.Close(); err != nil {
@@ -1369,6 +1495,23 @@ func (s *Server) tarGzHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(specs) == 0 {
+		s.respondError(w, http.StatusBadRequest, "No files specified for archive", "")
+		return
+	}
+
+	password := r.Header.Get("X-Decrypt-Password")
+	fetchableCount, totalSize := s.preflightArchiveSpecs(r.Context(), specs, password)
+	if fetchableCount == 0 {
+		s.respondError(w, http.StatusBadRequest, "No downloadable files for archive", "")
+		return
+	}
+
+	if s.maxArchiveSize > 0 && totalSize > s.maxArchiveSize {
+		s.respondError(w, http.StatusBadRequest, fmt.Sprintf("Archive too large (max %d bytes)", s.maxArchiveSize), "")
+		return
+	}
+
 	tarfilename := fmt.Sprintf("transfersh-%d.tar.gz", time.Now().UnixNano())
 
 	w.Header().Set("Content-Type", "application/x-gzip")
@@ -1379,12 +1522,16 @@ func (s *Server) tarGzHandler(w http.ResponseWriter, r *http.Request) {
 
 	zw := tar.NewWriter(gw)
 	defer storage.CloseCheck(zw)
-	password := r.Header.Get("X-Decrypt-Password")
+
+	var addedFiles int
+	var actualTotalSize int64
+	var skippedFiles []string
 
 	for _, spec := range specs {
-		reader, contentLength, err := s.fetchFileForArchive(r.Context(), spec.token, spec.filename, password)
+		reader, contentLength, err := s.fetchFileForArchive(r.Context(), spec.token, spec.filename, password, true)
 		if err != nil {
 			s.logger.Printf("tarGz: skipping %s/%s: %v", spec.token, spec.filename, err)
+			skippedFiles = append(skippedFiles, fmt.Sprintf("%s/%s", spec.token, spec.filename))
 			continue
 		}
 
@@ -1396,6 +1543,7 @@ func (s *Server) tarGzHandler(w http.ResponseWriter, r *http.Request) {
 		if err := zw.WriteHeader(header); err != nil {
 			storage.CloseCheck(reader)
 			s.logger.Printf("tarGz: failed to write header for %s: %v", spec.filename, err)
+			skippedFiles = append(skippedFiles, fmt.Sprintf("%s/%s", spec.token, spec.filename))
 			continue
 		}
 
@@ -1403,8 +1551,21 @@ func (s *Server) tarGzHandler(w http.ResponseWriter, r *http.Request) {
 		storage.CloseCheck(reader)
 		if err != nil {
 			s.logger.Printf("tarGz: failed to copy %s: %v", spec.filename, err)
+			skippedFiles = append(skippedFiles, fmt.Sprintf("%s/%s", spec.token, spec.filename))
 			continue
 		}
+		addedFiles++
+		actualTotalSize += storage.SafeUint64ToInt64(contentLength)
+	}
+
+	// Add manifest file
+	manifestContent := manifestForSpecs(specs, addedFiles, actualTotalSize, skippedFiles)
+	manifestHeader := &tar.Header{
+		Name: "_transfer-ng-manifest.txt",
+		Size: int64(len(manifestContent)),
+	}
+	if err := zw.WriteHeader(manifestHeader); err == nil {
+		_, _ = zw.Write([]byte(manifestContent))
 	}
 }
 
@@ -1417,6 +1578,23 @@ func (s *Server) tarHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(specs) == 0 {
+		s.respondError(w, http.StatusBadRequest, "No files specified for archive", "")
+		return
+	}
+
+	password := r.Header.Get("X-Decrypt-Password")
+	fetchableCount, totalSize := s.preflightArchiveSpecs(r.Context(), specs, password)
+	if fetchableCount == 0 {
+		s.respondError(w, http.StatusBadRequest, "No downloadable files for archive", "")
+		return
+	}
+
+	if s.maxArchiveSize > 0 && totalSize > s.maxArchiveSize {
+		s.respondError(w, http.StatusBadRequest, fmt.Sprintf("Archive too large (max %d bytes)", s.maxArchiveSize), "")
+		return
+	}
+
 	tarfilename := fmt.Sprintf("transfersh-%d.tar", time.Now().UnixNano())
 
 	w.Header().Set("Content-Type", "application/x-tar")
@@ -1424,12 +1602,16 @@ func (s *Server) tarHandler(w http.ResponseWriter, r *http.Request) {
 
 	zw := tar.NewWriter(w)
 	defer storage.CloseCheck(zw)
-	password := r.Header.Get("X-Decrypt-Password")
+
+	var addedFiles int
+	var actualTotalSize int64
+	var skippedFiles []string
 
 	for _, spec := range specs {
-		reader, contentLength, err := s.fetchFileForArchive(r.Context(), spec.token, spec.filename, password)
+		reader, contentLength, err := s.fetchFileForArchive(r.Context(), spec.token, spec.filename, password, true)
 		if err != nil {
 			s.logger.Printf("tar: skipping %s/%s: %v", spec.token, spec.filename, err)
+			skippedFiles = append(skippedFiles, fmt.Sprintf("%s/%s", spec.token, spec.filename))
 			continue
 		}
 
@@ -1441,6 +1623,7 @@ func (s *Server) tarHandler(w http.ResponseWriter, r *http.Request) {
 		if err := zw.WriteHeader(header); err != nil {
 			storage.CloseCheck(reader)
 			s.logger.Printf("tar: failed to write header for %s: %v", spec.filename, err)
+			skippedFiles = append(skippedFiles, fmt.Sprintf("%s/%s", spec.token, spec.filename))
 			continue
 		}
 
@@ -1448,8 +1631,21 @@ func (s *Server) tarHandler(w http.ResponseWriter, r *http.Request) {
 		storage.CloseCheck(reader)
 		if err != nil {
 			s.logger.Printf("tar: failed to copy %s: %v", spec.filename, err)
+			skippedFiles = append(skippedFiles, fmt.Sprintf("%s/%s", spec.token, spec.filename))
 			continue
 		}
+		addedFiles++
+		actualTotalSize += storage.SafeUint64ToInt64(contentLength)
+	}
+
+	// Add manifest file
+	manifestContent := manifestForSpecs(specs, addedFiles, actualTotalSize, skippedFiles)
+	manifestHeader := &tar.Header{
+		Name: "_transfer-ng-manifest.txt",
+		Size: int64(len(manifestContent)),
+	}
+	if err := zw.WriteHeader(manifestHeader); err == nil {
+		_, _ = zw.Write([]byte(manifestContent))
 	}
 }
 

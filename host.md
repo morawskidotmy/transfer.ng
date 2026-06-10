@@ -103,9 +103,11 @@ The CLI supports custom hosts via `--host` or `TRANSFER_HOST` environment variab
 | `--max-upload-size` | `MAX_UPLOAD_SIZE` | `0` | Max upload size in KB (`0` = unlimited) |
 | `--rate-limit` | `RATE_LIMIT` | `0` | Max download requests per minute per IP (`0` = unlimited) |
 | `--rate-limit-uploads` | `RATE_LIMIT_UPLOADS` | `0` | Max upload requests per minute per IP (`0` = unlimited) |
+| `--rate-limit-archives` | `RATE_LIMIT_ARCHIVES` | `0` | Max archive download requests per minute per IP (`0` = unlimited) |
 | `--max-dir-size` | `MAX_DIR_SIZE` | `0` | Rolling directory size cap (e.g. `5g`, `500m`). On new upload, oldest files in that directory are deleted until the new file fits. A single file larger than the cap is rejected. `0` = unlimited |
 | `--max-dir-files` | `MAX_DIR_FILES` | `0` | Max number of files per directory. `0` = unlimited |
 | `--max-archive-files` | `MAX_ARCHIVE_FILES` | `100` | Max files in a zip/tar.gz archive download |
+| `--max-archive-size` | `MAX_ARCHIVE_SIZE` | `0` | Max total size of files in an archive download (e.g. `5g`, `500m`). `0` = use max-upload-size |
 
 Directory uploads always create or use a directory token. `MAX_DIR_SIZE` is enforced per directory, not globally across storage.
 
