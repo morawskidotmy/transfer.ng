@@ -932,3 +932,180 @@ func (s *suiteDirectory) TestSubdirectoryPagination(c *C) {
 	c.Assert(w.Header().Get("X-Page"), Equals, "1")
 	c.Assert(w.Header().Get("X-Total-Pages"), Equals, "3")
 }
+
+// TestActionRoutesWithBrowserAccept verifies that /get/, /download/, and /inline/
+// routes return file content even when the client sends Accept: text/html.
+// This is a regression test for the bug where browser requests to /get/ returned 404.
+func (s *suiteDirectory) TestActionRoutesWithBrowserAccept(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/action-test.txt", strings.NewReader("action content"))
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirURL := w.Header().Get("X-Url-Directory")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	// Test /get/ with browser Accept header
+	req = httptest.NewRequest("GET", "http://example.com/get/"+dirToken+"/action-test.txt", nil)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Body.String(), Equals, "action content")
+	c.Assert(w.Header().Get("Content-Disposition"), Matches, ".*action-test.txt.*")
+
+	// Test /download/ with browser Accept header
+	req = httptest.NewRequest("GET", "http://example.com/download/"+dirToken+"/action-test.txt", nil)
+	req.Header.Set("Accept", "text/html")
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Body.String(), Equals, "action content")
+	c.Assert(w.Header().Get("Content-Disposition"), Matches, "attachment.*")
+
+	// Test /inline/ with browser Accept header
+	req = httptest.NewRequest("GET", "http://example.com/inline/"+dirToken+"/action-test.txt", nil)
+	req.Header.Set("Accept", "text/html")
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Body.String(), Equals, "action content")
+	c.Assert(w.Header().Get("Content-Disposition"), Matches, "inline.*")
+}
+
+// TestActionRoutesWithNestedPaths verifies that action routes work with nested file paths.
+func (s *suiteDirectory) TestActionRoutesWithNestedPaths(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/nested-action.txt", strings.NewReader("nested action"))
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirURL := w.Header().Get("X-Url-Directory")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+	uploadToken := w.Header().Get("X-Upload-Token")
+
+	// Upload a nested file
+	req = httptest.NewRequest("PUT", "http://example.com/"+dirToken+"/deep/path/file.txt", strings.NewReader("deep content"))
+	req.Header.Set("X-Upload-Token", uploadToken)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	// Test /get/ with nested path and browser Accept
+	req = httptest.NewRequest("GET", "http://example.com/get/"+dirToken+"/deep/path/file.txt", nil)
+	req.Header.Set("Accept", "text/html")
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Body.String(), Equals, "deep content")
+
+	// Test /download/ with nested path
+	req = httptest.NewRequest("GET", "http://example.com/download/"+dirToken+"/deep/path/file.txt", nil)
+	req.Header.Set("Accept", "text/html")
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Body.String(), Equals, "deep content")
+}
+
+// TestContentNegotiationHomepage verifies that the homepage returns text/plain
+// for curl and text/html for browsers.
+func (s *suiteDirectory) TestContentNegotiationHomepage(c *C) {
+	// curl-style request (Accept: */*)
+	req := httptest.NewRequest("GET", "http://example.com/", nil)
+	req.Header.Set("Accept", "*/*")
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Header().Get("Content-Type"), Matches, "text/plain.*")
+	c.Assert(w.Header().Get("Vary"), Matches, ".*Accept.*")
+	c.Assert(w.Header().Get("Cache-Control"), Equals, "no-store")
+
+	// Browser request (Accept: text/html)
+	req = httptest.NewRequest("GET", "http://example.com/", nil)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Header().Get("Content-Type"), Matches, "text/html.*")
+	c.Assert(w.Header().Get("Vary"), Matches, ".*Accept.*")
+	c.Assert(w.Header().Get("Cache-Control"), Equals, "no-store")
+}
+
+// TestContentNegotiationDirectoryListing verifies that directory listings return
+// text/plain for curl and text/html for browsers.
+func (s *suiteDirectory) TestContentNegotiationDirectoryListing(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/cn-test.txt", strings.NewReader("cn content"))
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirURL := w.Header().Get("X-Url-Directory")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	// curl-style request (Accept: */*)
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/", nil)
+	req.Header.Set("Accept", "*/*")
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Header().Get("Content-Type"), Equals, "text/plain")
+	c.Assert(w.Header().Get("Vary"), Matches, ".*Accept.*")
+	c.Assert(w.Header().Get("Cache-Control"), Equals, "no-store")
+	c.Assert(w.Body.String(), Matches, "(?s).*cn-test.txt.*")
+
+	// Browser request (Accept: text/html)
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/", nil)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Header().Get("Content-Type"), Matches, "text/html.*")
+	c.Assert(w.Header().Get("Vary"), Matches, ".*Accept.*")
+	c.Assert(w.Header().Get("Cache-Control"), Equals, "no-store")
+	c.Assert(w.Body.String(), Matches, "(?s).*cn-test.txt.*")
+	c.Assert(w.Body.String(), Matches, "(?s).*DIRECTORY.*")
+}
+
+// TestRouteSafetyConflictingPrefixes verifies that routes with similar prefixes
+// are correctly disambiguated.
+func (s *suiteDirectory) TestRouteSafetyConflictingPrefixes(c *C) {
+	// Upload a file
+	req := httptest.NewRequest("PUT", "http://example.com/safety.txt", strings.NewReader("safety content"))
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirURL := w.Header().Get("X-Url-Directory")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+	uploadToken := w.Header().Get("X-Upload-Token")
+
+	// Upload a file named "get" to ensure it doesn't conflict with /get/ action route
+	req = httptest.NewRequest("PUT", "http://example.com/"+dirToken+"/get", strings.NewReader("file named get"))
+	req.Header.Set("X-Upload-Token", uploadToken)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	// Access the file named "get" directly (should return file content)
+	req = httptest.NewRequest("GET", "http://example.com/"+dirToken+"/get", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Body.String(), Equals, "file named get")
+
+	// Access /get/{token}/safety.txt (should also return file content)
+	req = httptest.NewRequest("GET", "http://example.com/get/"+dirToken+"/safety.txt", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Body.String(), Equals, "safety content")
+}
+
+// TestHeadRoutesForDirectoryArchives verifies that HEAD requests for directory
+// archives return appropriate headers without generating the archive.
+func (s *suiteDirectory) TestHeadRoutesForDirectoryArchives(c *C) {
+	req := httptest.NewRequest("PUT", "http://example.com/head-archive.txt", strings.NewReader("head archive content"))
+	w := s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+
+	dirURL := w.Header().Get("X-Url-Directory")
+	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
+
+	// HEAD /{token}/.zip
+	req = httptest.NewRequest("HEAD", "http://example.com/"+dirToken+"/.zip", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Header().Get("Content-Type"), Equals, "application/zip")
+	c.Assert(w.Header().Get("Content-Disposition"), Matches, ".*\\.zip.*")
+
+	// HEAD /{token}/.tar.gz
+	req = httptest.NewRequest("HEAD", "http://example.com/"+dirToken+"/.tar.gz", nil)
+	w = s.do(req)
+	c.Assert(w.Code, Equals, http.StatusOK)
+	c.Assert(w.Header().Get("Content-Type"), Equals, "application/x-gzip")
+	c.Assert(w.Header().Get("Content-Disposition"), Matches, ".*\\.tar\\.gz.*")
+}

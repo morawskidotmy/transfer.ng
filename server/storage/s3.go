@@ -138,10 +138,10 @@ func (s *S3Storage) Get(ctx context.Context, token string, filename string, rng 
 
 // Delete removes a file from storage
 func (s *S3Storage) Delete(ctx context.Context, token string, filename string) (err error) {
-	metadata := fmt.Sprintf("%s/%s.metadata", token, filename)
+	key := fmt.Sprintf("%s/%s", token, filename)
 	deleteRequest := &s3.DeleteObjectInput{
 		Bucket: aws.String(s.bucket),
-		Key:    aws.String(metadata),
+		Key:    aws.String(key),
 	}
 
 	_, err = s.s3.DeleteObject(ctx, deleteRequest)
@@ -149,10 +149,10 @@ func (s *S3Storage) Delete(ctx context.Context, token string, filename string) (
 		return
 	}
 
-	key := fmt.Sprintf("%s/%s", token, filename)
+	metadata := fmt.Sprintf("%s/%s.metadata", token, filename)
 	deleteRequest = &s3.DeleteObjectInput{
 		Bucket: aws.String(s.bucket),
-		Key:    aws.String(key),
+		Key:    aws.String(metadata),
 	}
 
 	_, err = s.s3.DeleteObject(ctx, deleteRequest)
