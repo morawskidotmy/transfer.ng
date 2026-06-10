@@ -34,6 +34,9 @@ const (
 	defaultMaxDelay   = 30 * time.Second
 	barWidth          = 30
 
+	uploadTimeoutBase    = 2 * time.Minute
+	uploadTimeoutPerByte = 10 * time.Second / (1024 * 1024) // 10s per MB
+
 	githubRepo    = "morawskidotmy/transfer.ng"
 	githubRepoURL = "https://github.com/" + githubRepo + ".git"
 	updateTimeout = 5 * time.Second
@@ -45,6 +48,7 @@ type Config struct {
 	MaxRetries    int
 	Insecure      bool
 	MinDelay      time.Duration
+	UploadTimeout time.Duration
 	NoUpdateCheck bool
 	ForceUpdate   bool
 	ShowVersion   bool
@@ -64,12 +68,13 @@ type DirResponse struct {
 }
 
 type globalThrottle struct {
-	mu         sync.Mutex
-	lastTime   time.Time
-	minDelay   time.Duration
-	maxDelay   time.Duration
-	delay      time.Duration
-	pauseUntil time.Time
+	mu            sync.Mutex
+	lastTime      time.Time
+	minDelay      time.Duration
+	maxDelay      time.Duration
+	delay         time.Duration
+	pauseUntil    time.Time
+	serverPause   time.Time // Server-imposed pause from 429 Retry-After
 }
 
 func newGlobalThrottle(minDelay time.Duration) *globalThrottle {
@@ -89,6 +94,18 @@ func (t *globalThrottle) Wait() {
 		t.mu.Lock()
 		now := time.Now()
 
+		// Respect server-imposed pause (from 429 Retry-After)
+		if !t.serverPause.IsZero() {
+			if now.Before(t.serverPause) {
+				waitUntil := t.serverPause
+				t.mu.Unlock()
+				time.Sleep(time.Until(waitUntil))
+				continue
+			}
+			t.serverPause = time.Time{}
+		}
+
+		// Respect adaptive pause (from failures)
 		if !t.pauseUntil.IsZero() {
 			if now.Before(t.pauseUntil) {
 				waitUntil := t.pauseUntil
@@ -152,7 +169,14 @@ func (t *globalThrottle) RecordFailure(retryAfter time.Duration) time.Duration {
 	}
 
 	t.delay = nextDelay
-	t.pauseUntil = time.Now().Add(pauseFor)
+
+	// Server-imposed pause (from 429 Retry-After) goes to serverPause
+	// so it won't be cleared by success
+	if retryAfter > 0 {
+		t.serverPause = time.Now().Add(pauseFor)
+	} else {
+		t.pauseUntil = time.Now().Add(pauseFor)
+	}
 
 	waitTime := pauseFor
 	if retryAfter <= 0 {
@@ -169,6 +193,7 @@ func (t *globalThrottle) RecordSuccess() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	// Only clear adaptive pause, not server-imposed pause
 	t.pauseUntil = time.Time{}
 	if t.delay <= 0 {
 		t.delay = t.minDelay
