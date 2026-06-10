@@ -659,6 +659,7 @@ func (s *Server) listDirectoryHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Vary", "Accept")
+	w.Header().Set("Cache-Control", "no-store")
 
 	if acceptsHTML(r.Header) {
 		s.writeDirectoryHTMLResponse(w, data)

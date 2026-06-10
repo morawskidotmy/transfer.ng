@@ -162,10 +162,6 @@ go build -o transfer.ng .
 
 ## Bash Snippet (user-facing)
 
-The `transfer()` function in README.md parses `X-Url-Directory` header (not body text) for the directory URL. Directory uploads use process substitution (`while read ... done < <(find ...)`) with `&` and `wait` for parallel uploads.
-
-## Design Principles
-
 - **No client-side JavaScript**: All web pages are pure HTML/CSS. QR codes, previews, and directory listings are rendered server-side. No JS frameworks, no inline scripts, no external script dependencies.
 - **Server-side rendering**: All dynamic content (QR codes, file previews, directory listings) is generated on the server and delivered as static HTML.
 - **Minimal dependencies**: The web UI uses only embedded HTML templates and CSS. No build tools, no bundlers, no npm.

@@ -290,38 +290,6 @@ Or use Docker Compose:
 docker-compose up -d
 ```
 
-## Shell Functions
-
-### Bash/Zsh
-
-Install the helper with one of these one-liners:
-
-```bash
-curl -sL https://raw.githubusercontent.com/morawskidotmy/transfer.ng/main/extras/transfer.sh >> ~/.bashrc
-curl -sL https://raw.githubusercontent.com/morawskidotmy/transfer.ng/main/extras/transfer.sh >> ~/.zshrc
-```
-
-The sourceable function lives at [`extras/transfer.sh`](extras/transfer.sh).
-
-Usage:
-
-```bash
-transfer hello.txt
-# https://transfer.morawski.my/abcd1234/hello.txt
-# Directory: https://transfer.morawski.my/abcd1234/
-
-transfer myfolder/
-# https://transfer.morawski.my/efgh5678/myfolder/file1.txt
-# https://transfer.morawski.my/efgh5678/myfolder/sub/file2.txt
-# Directory: https://transfer.morawski.my/efgh5678/
-
-transfer file1.txt file2.txt file3.txt
-# https://transfer.morawski.my/ijkl9012/file1.txt
-# https://transfer.morawski.my/ijkl9012/file2.txt
-# https://transfer.morawski.my/ijkl9012/file3.txt
-# Directory: https://transfer.morawski.my/ijkl9012/
-```
-
 ## Credits
 
 - **Remco Verhoef** - Original author (transfer.sh)

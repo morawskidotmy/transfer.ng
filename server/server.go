@@ -753,7 +753,6 @@ func (s *Server) setupRoutes(r *mux.Router, staticHandler http.Handler) {
 	// File routes with nested path support
 	r.HandleFunc("/{token}/{filename:.+}", s.headHandler).Methods("HEAD")
 	r.HandleFunc("/{action:(?:download|get|inline)}/{token}/{filename:.+}", s.headHandler).Methods("HEAD")
-	r.HandleFunc("/{token}/{filename:.+}", s.previewHandler).MatcherFunc(s.previewMatcher).Methods("GET")
 
 	getHandlerFn := s.getHandler
 	if s.rateLimitRequests > 0 {
@@ -762,6 +761,11 @@ func (s *Server) setupRoutes(r *mux.Router, staticHandler http.Handler) {
 		}
 		getHandlerFn = ratelimit.Request(realIPKeyFn).Rate(s.rateLimitRequests, 60*time.Second).LimitBy(memory.New())(http.HandlerFunc(getHandlerFn)).ServeHTTP
 	}
+
+	// Action routes (/get/, /download/, /inline/) must come before the preview
+	// route, otherwise /{token}/{filename:.+} matches them with token="get".
+	r.HandleFunc("/{action:(?:download|get|inline)}/{token}/{filename:.+}", getHandlerFn).Methods("GET")
+	r.HandleFunc("/{token}/{filename:.+}", s.previewHandler).MatcherFunc(s.previewMatcher).Methods("GET")
 
 	var putHandlerFn http.Handler = http.HandlerFunc(s.putHandler)
 	var putToDirHandlerFn http.Handler = http.HandlerFunc(s.putToDirHandler)
@@ -775,7 +779,6 @@ func (s *Server) setupRoutes(r *mux.Router, staticHandler http.Handler) {
 		postHandlerFn = ratelimit.Request(realIPKeyFn).Rate(s.rateLimitUploads, 60*time.Second).LimitBy(memory.New())(http.HandlerFunc(s.postHandler))
 	}
 
-	r.HandleFunc("/{action:(?:download|get|inline)}/{token}/{filename:.+}", getHandlerFn).Methods("GET")
 	r.HandleFunc("/{token}/{filename:.+}", getHandlerFn).Methods("GET")
 	r.HandleFunc("/{filename}/virustotal", s.virusTotalHandler).Methods("PUT")
 	r.HandleFunc("/{filename}/scan", s.scanHandler).Methods("PUT")
