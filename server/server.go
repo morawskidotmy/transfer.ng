@@ -497,7 +497,7 @@ func (s *Server) startProfiler() bool {
 	}
 	profileAddr := s.ProfileListenerString
 	if profileAddr == "" {
-		profileAddr = ":6060"
+		profileAddr = "127.0.0.1:6060"
 	}
 	go func() {
 		s.logger.Println("Profiler listening at:", profileAddr)

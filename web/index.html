@@ -235,13 +235,19 @@
     <div class="section" style="margin-bottom: 20px;">
       <div class="section-header">
         <div class="section-icon">+</div>
-        <div style="font-weight: bold; font-size: 1.05em;">INSTALL SHELL HELPER</div>
+        <div style="font-weight: bold; font-size: 1.05em;">TRANSFER CLI (RECOMMENDED)</div>
       </div>
       <div class="description">
-        Add the <code>transfer</code> function to bash or zsh:
+        Install the fast CLI client with parallel uploads, directory support, and automatic retries:
       </div>
-      <pre>curl -sL https://raw.githubusercontent.com/morawskidotmy/transfer.ng/main/extras/transfer.sh &gt;&gt; ~/.bashrc
-curl -sL https://raw.githubusercontent.com/morawskidotmy/transfer.ng/main/extras/transfer.sh &gt;&gt; ~/.zshrc</pre>
+      <pre>curl -sL https://raw.githubusercontent.com/morawskidotmy/transfer.ng/main/install-transfer.sh | bash</pre>
+      <div class="description" style="margin-top: 10px;">
+        Then upload files and directories easily:
+      </div>
+      <pre>transfer file.txt           # Single file
+transfer file1 file2 file3  # Multiple files
+transfer myfolder/          # Directory (preserves structure)
+transfer --workers=16 big/  # Custom parallelism</pre>
     </div>
 
     <div class="grid">

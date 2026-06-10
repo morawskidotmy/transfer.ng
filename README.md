@@ -34,6 +34,25 @@ Easy and fast file sharing from the command-line. Self-hostable with support for
 
 ## Quick Start
 
+### Using the Transfer CLI (Recommended)
+
+The fastest way to upload files and directories with parallel uploads:
+
+```bash
+# Install the CLI
+curl -sL https://raw.githubusercontent.com/morawskidotmy/transfer.ng/main/install-transfer.sh | bash
+
+# Upload files
+transfer file.txt                    # Single file
+transfer file1.txt file2.txt         # Multiple files
+transfer myfolder/                   # Directory (preserves structure)
+transfer --workers=16 largefolder/   # Custom parallelism
+```
+
+See the [Transfer CLI](#transfer-cli) section for full documentation.
+
+### Using curl
+
 ```bash
 # Upload a file
 curl --upload-file ./hello.txt https://transfer.morawski.my/hello.txt
@@ -289,6 +308,49 @@ Or use Docker Compose:
 ```bash
 docker-compose up -d
 ```
+
+## Transfer CLI
+
+A fast command-line client for uploading files and directories with parallel uploads.
+
+### Installation
+
+```bash
+curl -sL https://raw.githubusercontent.com/morawskidotmy/transfer.ng/main/install-transfer.sh | bash
+```
+
+This will:
+- Download and build the transfer binary
+- Install it to `~/.local/bin`
+- Add the directory to your PATH in `.zshrc` or `.bashrc` if needed
+
+### Usage
+
+```bash
+# Upload a single file
+transfer file.txt
+
+# Upload multiple files
+transfer file1.txt file2.txt file3.txt
+
+# Upload a directory (preserves structure)
+transfer myfolder/
+
+# Upload with custom settings
+transfer --workers=16 --host=https://custom.server.com largefolder/
+```
+
+### Options
+
+- `--host=URL` - Server URL (default: https://transfer.morawski.my)
+- `--workers=N` - Number of parallel upload workers (default: 8)
+- `--insecure` - Disable TLS verification
+
+### Environment Variables
+
+- `TRANSFER_HOST` - Server URL
+- `TRANSFER_WORKERS` - Number of parallel workers
+- `TRANSFER_MAX_RETRIES` - Maximum retry attempts (default: 3)
 
 ## Credits
 

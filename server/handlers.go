@@ -1736,7 +1736,7 @@ func (s *Server) RedirectHandler(h http.Handler) http.HandlerFunc {
 				}
 			}
 
-			// #nosec G710 -- redirect is to same host (from r.Host), not user-controlled
+			// #nosec G710 -- r.Host is client-controlled; deployment must validate Host at the proxy/ingress level
 			http.Redirect(w, r, u.String(), http.StatusPermanentRedirect)
 			return
 		}
