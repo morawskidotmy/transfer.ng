@@ -14,21 +14,6 @@ Test it:
 curl --upload-file hello.txt http://localhost:8080/hello.txt
 ```
 
-## Client Shell Helper
-
-Users can install the bash/zsh `transfer` helper directly from the repository:
-
-```bash
-curl -sL https://raw.githubusercontent.com/morawskidotmy/transfer.ng/main/extras/transfer.sh >> ~/.bashrc
-curl -sL https://raw.githubusercontent.com/morawskidotmy/transfer.ng/main/extras/transfer.sh >> ~/.zshrc
-```
-
-Set `TRANSFER_HOST` if your service is not hosted at the default public instance:
-
-```bash
-export TRANSFER_HOST=https://transfer.example.com
-```
-
 ## All Flags
 
 ### Network
