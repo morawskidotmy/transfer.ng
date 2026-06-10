@@ -29,8 +29,9 @@ var (
 const (
 	defaultHost       = "https://transfer.morawski.my"
 	defaultWorkers    = 4
-	defaultMaxRetries = 10
+	defaultMaxRetries = 0
 	defaultMinDelay   = 500
+	defaultMaxDelay   = 30 * time.Second
 	barWidth          = 30
 
 	githubRepo    = "morawskidotmy/transfer.ng"
@@ -63,15 +64,24 @@ type DirResponse struct {
 }
 
 type globalThrottle struct {
-	mu       sync.Mutex
-	lastTime time.Time
-	minDelay time.Duration
-	paused   bool
-	pauseEnd time.Time
+	mu         sync.Mutex
+	lastTime   time.Time
+	minDelay   time.Duration
+	maxDelay   time.Duration
+	delay      time.Duration
+	pauseUntil time.Time
 }
 
 func newGlobalThrottle(minDelay time.Duration) *globalThrottle {
-	return &globalThrottle{minDelay: minDelay}
+	if minDelay <= 0 {
+		minDelay = time.Duration(defaultMinDelay) * time.Millisecond
+	}
+
+	return &globalThrottle{
+		minDelay: minDelay,
+		maxDelay: defaultMaxDelay,
+		delay:    minDelay,
+	}
 }
 
 func (t *globalThrottle) Wait() {
@@ -79,21 +89,28 @@ func (t *globalThrottle) Wait() {
 		t.mu.Lock()
 		now := time.Now()
 
-		if t.paused && now.Before(t.pauseEnd) {
-			waitUntil := t.pauseEnd
-			t.mu.Unlock()
-			time.Sleep(time.Until(waitUntil))
-			continue
+		if !t.pauseUntil.IsZero() {
+			if now.Before(t.pauseUntil) {
+				waitUntil := t.pauseUntil
+				t.mu.Unlock()
+				time.Sleep(time.Until(waitUntil))
+				continue
+			}
+			t.pauseUntil = time.Time{}
 		}
-		t.paused = false
+
+		delay := t.delay
+		if delay <= 0 {
+			delay = t.minDelay
+		}
 
 		if !t.lastTime.IsZero() {
 			elapsed := now.Sub(t.lastTime)
-			if elapsed < t.minDelay {
-				sleepFor := t.minDelay - elapsed
+			if elapsed < delay {
+				sleepFor := delay - elapsed
 				t.mu.Unlock()
 				time.Sleep(sleepFor)
-				t.mu.Lock()
+				continue
 			}
 		}
 		t.lastTime = time.Now()
@@ -102,11 +119,70 @@ func (t *globalThrottle) Wait() {
 	}
 }
 
-func (t *globalThrottle) PauseFor(d time.Duration) {
+func (t *globalThrottle) RecordFailure(retryAfter time.Duration) time.Duration {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.paused = true
-	t.pauseEnd = time.Now().Add(d)
+
+	current := t.delay
+	if current <= 0 {
+		current = t.minDelay
+	}
+	if current <= 0 {
+		current = time.Duration(defaultMinDelay) * time.Millisecond
+	}
+
+	nextDelay := current * 2
+	if nextDelay < t.minDelay {
+		nextDelay = t.minDelay
+	}
+	if nextDelay > t.maxDelay {
+		nextDelay = t.maxDelay
+	}
+
+	pauseFor := nextDelay
+	if retryAfter > pauseFor {
+		pauseFor = retryAfter
+	}
+
+	if retryAfter > nextDelay {
+		nextDelay = retryAfter
+		if nextDelay > t.maxDelay {
+			nextDelay = t.maxDelay
+		}
+	}
+
+	t.delay = nextDelay
+	t.pauseUntil = time.Now().Add(pauseFor)
+
+	waitTime := pauseFor
+	if retryAfter <= 0 {
+		jitterRange := waitTime / 2
+		if jitterRange > 0 {
+			waitTime += time.Duration(rand.Int63n(int64(jitterRange)))
+		}
+	}
+
+	return waitTime
+}
+
+func (t *globalThrottle) RecordSuccess() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.pauseUntil = time.Time{}
+	if t.delay <= 0 {
+		t.delay = t.minDelay
+	}
+	if t.delay > t.minDelay {
+		nextDelay := t.delay - t.delay/4
+		if nextDelay < t.minDelay {
+			nextDelay = t.minDelay
+		}
+		t.delay = nextDelay
+	}
+	if t.delay < t.minDelay {
+		t.delay = t.minDelay
+	}
 }
 
 type progressDisplay struct {
@@ -460,11 +536,13 @@ func uploadFiles(config Config, dirResp *DirResponse, files []string, basePaths 
 
 func uploadFileWithRetry(config Config, dirResp *DirResponse, filePath string, basePath string, maxRetries int, throttle *globalThrottle, display *progressDisplay) UploadResult {
 	var lastErr error
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	attempt := 0
+	for {
 		throttle.Wait()
 
 		result := uploadFile(config, dirResp, filePath, basePath, display)
 		if result.Success {
+			throttle.RecordSuccess()
 			return UploadResult{
 				Path:    result.Path,
 				URL:     result.URL,
@@ -475,40 +553,23 @@ func uploadFileWithRetry(config Config, dirResp *DirResponse, filePath string, b
 
 		lastErr = result.Error
 
-		if result.Retryable && attempt < maxRetries-1 {
-			waitTime := calculateBackoff(attempt, result.RetryAfter)
-			if result.Retryable {
-				throttle.PauseFor(waitTime)
+		if result.Retryable {
+			if maxRetries > 0 && attempt >= maxRetries-1 {
+				break
 			}
+			waitTime := throttle.RecordFailure(result.RetryAfter)
 			time.Sleep(waitTime)
+			attempt++
 			continue
 		}
 
-		if !result.Retryable {
-			break
-		}
+		break
 	}
 	return UploadResult{
 		Path:    filePath,
 		Success: false,
-		Error:   fmt.Errorf("failed after %d attempts: %w", maxRetries, lastErr),
+		Error:   fmt.Errorf("failed after %d attempts: %w", attempt+1, lastErr),
 	}
-}
-
-func calculateBackoff(attempt int, retryAfter time.Duration) time.Duration {
-	if retryAfter > 0 {
-		return retryAfter
-	}
-
-	base := time.Duration(1<<uint(attempt)) * 500 * time.Millisecond
-	maxWait := 30 * time.Second
-	if base > maxWait {
-		base = maxWait
-	}
-
-	// #nosec G404 -- math/rand is used for retry jitter, not cryptographic purposes
-	jitter := time.Duration(rand.Int63n(int64(base / 2)))
-	return base + jitter
 }
 
 type uploadResult struct {
@@ -568,23 +629,20 @@ func uploadFile(config Config, dirResp *DirResponse, filePath string, basePath s
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode == http.StatusTooManyRequests {
+	if resp.StatusCode == http.StatusTooManyRequests ||
+		resp.StatusCode == http.StatusRequestTimeout ||
+		resp.StatusCode == http.StatusTooEarly ||
+		resp.StatusCode == http.StatusInternalServerError ||
+		resp.StatusCode == http.StatusServiceUnavailable ||
+		resp.StatusCode == http.StatusBadGateway ||
+		resp.StatusCode == http.StatusGatewayTimeout {
 		retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
 		return uploadResult{
 			Path:       filePath,
 			Success:    false,
-			Error:      fmt.Errorf("rate limited (429)"),
+			Error:      fmt.Errorf("server error (%d)", resp.StatusCode),
 			Retryable:  true,
 			RetryAfter: retryAfter,
-		}
-	}
-
-	if resp.StatusCode == http.StatusInternalServerError || resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusBadGateway {
-		return uploadResult{
-			Path:      filePath,
-			Success:   false,
-			Error:     fmt.Errorf("server error (%d)", resp.StatusCode),
-			Retryable: true,
 		}
 	}
 
@@ -904,7 +962,7 @@ func printUsage() {
 	fmt.Println("Environment variables:")
 	fmt.Println("  TRANSFER_HOST          Server URL")
 	fmt.Println("  TRANSFER_WORKERS       Number of parallel workers")
-	fmt.Println("  TRANSFER_MAX_RETRIES   Maximum retry attempts (default: 10)")
+	fmt.Println("  TRANSFER_MAX_RETRIES   Maximum retry attempts (default: 0 = unlimited)")
 	fmt.Println("  TRANSFER_MIN_DELAY     Minimum delay between requests in ms (default: 500)")
 	fmt.Println()
 	fmt.Println("Examples:")
