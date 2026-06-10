@@ -110,18 +110,21 @@ func (t *globalThrottle) PauseFor(d time.Duration) {
 }
 
 type progressDisplay struct {
-	mu       sync.Mutex
-	dirURL   string
-	fileName string
-	bytes    int64
-	total    int64
-	isTTY    bool
+	mu            sync.Mutex
+	dirURL        string
+	fileName      string
+	bytes         int64
+	total         int64
+	totalFiles    int64
+	completedFiles int64
+	isTTY         bool
 }
 
-func newProgressDisplay(dirURL string) *progressDisplay {
+func newProgressDisplay(dirURL string, totalFiles int64) *progressDisplay {
 	return &progressDisplay{
-		dirURL: dirURL,
-		isTTY:  term.IsTerminal(int(os.Stdout.Fd())),
+		dirURL:     dirURL,
+		totalFiles: totalFiles,
+		isTTY:      term.IsTerminal(int(os.Stdout.Fd())),
 	}
 }
 
@@ -134,24 +137,39 @@ func (p *progressDisplay) Update(fileName string, current, total int64) {
 	p.render()
 }
 
+func (p *progressDisplay) FileCompleted() {
+	p.mu.Lock()
+	p.completedFiles++
+	p.mu.Unlock()
+	p.render()
+}
+
 func (p *progressDisplay) render() {
 	if !p.isTTY {
 		return
 	}
 
 	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	name := p.fileName
 	current := p.bytes
 	total := p.total
 	dirURL := p.dirURL
-	p.mu.Unlock()
+	completed := p.completedFiles
+	totalF := p.totalFiles
 
-	var pct float64
+	var filePct float64
 	if total > 0 {
-		pct = float64(current) / float64(total) * 100
+		filePct = float64(current) / float64(total) * 100
 	}
 
-	filled := int(pct / 100 * float64(barWidth))
+	var overallPct float64
+	if totalF > 0 {
+		overallPct = float64(completed) / float64(totalF) * 100
+	}
+
+	filled := int(overallPct / 100 * float64(barWidth))
 	if filled > barWidth {
 		filled = barWidth
 	}
@@ -164,23 +182,23 @@ func (p *progressDisplay) render() {
 
 	var sb strings.Builder
 	sb.WriteString("\033[2K\r")
+	fmt.Fprintf(&sb, "[%s] %3.0f%% (%d/%d files)\n", bar, overallPct, completed, totalF)
+	sb.WriteString("\033[2K\r")
 	sb.WriteString(name)
 	sb.WriteString("\n")
 	sb.WriteString("\033[2K\r")
-	sb.WriteString("[")
-	sb.WriteString(bar)
-	fmt.Fprintf(&sb, "] %3.0f%% %s", pct, sizeStr)
-	sb.WriteString("\n")
+	fmt.Fprintf(&sb, "  %3.0f%% %s\n", filePct, sizeStr)
 	sb.WriteString("\033[2K\r")
 	sb.WriteString(dirURL)
-	sb.WriteString("\033[3A\r")
+	sb.WriteString("\n")
+	sb.WriteString("\033[4A\r")
 
 	fmt.Print(sb.String())
 }
 
 func (p *progressDisplay) Finish() {
 	if p.isTTY {
-		fmt.Print("\033[3B\n")
+		fmt.Print("\033[4B\n")
 	}
 }
 
@@ -257,7 +275,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	display := newProgressDisplay(dirResp.DirectoryURL)
+	display := newProgressDisplay(dirResp.DirectoryURL, int64(len(files)))
 	throttle := newGlobalThrottle(config.MinDelay)
 
 	results := uploadFiles(config, dirResp, files, basePaths, throttle, display)
@@ -422,15 +440,16 @@ func uploadFiles(config Config, dirResp *DirResponse, files []string, basePaths 
 			for idx := range work {
 				file := files[idx]
 				basePath := basePaths[idx]
-				result := uploadFileWithRetry(config, dirResp, file, basePath, config.MaxRetries, throttle, display)
-				results[idx] = result
+			result := uploadFileWithRetry(config, dirResp, file, basePath, config.MaxRetries, throttle, display)
+			results[idx] = result
 
-				atomic.AddInt64(&completed, 1)
+			atomic.AddInt64(&completed, 1)
+			display.FileCompleted()
 
-				if !result.Success {
-					display.ShowError(result.Path)
-					time.Sleep(200 * time.Millisecond)
-				}
+			if !result.Success {
+				display.ShowError(result.Path)
+				time.Sleep(200 * time.Millisecond)
+			}
 			}
 		}()
 	}
