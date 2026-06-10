@@ -465,17 +465,20 @@ func applyPagination(entries []dirFileEntry, page, limit int) (paginated []dirFi
 
 // directoryListData is the unified template data for both root and subdirectory listings.
 type directoryListData struct {
-	Token       string
-	Subpath     string
-	RootURL     string
-	Breadcrumbs []breadcrumb
-	Subdirs     []dirSubdirEntry
-	Files       []dirFileEntry
-	Page        int
-	Limit       int
-	TotalFiles  int
-	TotalPages  int
-	WebAddress  string
+	Token           string
+	Subpath         string
+	RootURL         string
+	ZipURL          string
+	TarGzURL        string
+	HasArchiveFiles bool
+	Breadcrumbs     []breadcrumb
+	Subdirs         []dirSubdirEntry
+	Files           []dirFileEntry
+	Page            int
+	Limit           int
+	TotalFiles      int
+	TotalPages      int
+	WebAddress      string
 }
 
 func (s *Server) writeDirectoryHTMLResponse(w http.ResponseWriter, data directoryListData) {
@@ -641,21 +644,42 @@ func (s *Server) listDirectoryHandler(w http.ResponseWriter, r *http.Request) {
 	rootRelative, _ := url.Parse(path.Join(s.proxyPath, dirToken) + "/")
 	rootURL := resolveURL(r, rootRelative, s.proxyPort)
 
+	// Generate scoped archive URLs (include subpath if viewing a subdirectory)
+	zipPath := path.Join(s.proxyPath, "zip", dirToken)
+	if subpath != "" {
+		zipPath = path.Join(zipPath, escapePathForURL(subpath))
+	}
+	zipRelative, _ := url.Parse(zipPath + "/")
+	zipURL := resolveURL(r, zipRelative, s.proxyPort)
+
+	tarGzPath := path.Join(s.proxyPath, "tar.gz", dirToken)
+	if subpath != "" {
+		tarGzPath = path.Join(tarGzPath, escapePathForURL(subpath))
+	}
+	tarGzRelative, _ := url.Parse(tarGzPath + "/")
+	tarGzURL := resolveURL(r, tarGzRelative, s.proxyPort)
+
 	totalFiles := len(entries)
 	entries, totalPages, page := applyPagination(entries, page, limit)
 
+	// Check if there are files in the current scope (subpath or root)
+	scopedFiles := filterFilesBySubpath(idx.Files, subpath)
+
 	data := directoryListData{
-		Token:       dirToken,
-		Subpath:     subpath,
-		RootURL:     rootURL,
-		Breadcrumbs: crumbs,
-		Subdirs:     subdirs,
-		Files:       entries,
-		Page:        page,
-		Limit:       limit,
-		TotalFiles:  totalFiles,
-		TotalPages:  totalPages,
-		WebAddress:  resolveWebAddress(r, s.proxyPath, s.proxyPort),
+		Token:           dirToken,
+		Subpath:         subpath,
+		RootURL:         rootURL,
+		ZipURL:          zipURL,
+		TarGzURL:        tarGzURL,
+		HasArchiveFiles: len(scopedFiles) > 0,
+		Breadcrumbs:     crumbs,
+		Subdirs:         subdirs,
+		Files:           entries,
+		Page:            page,
+		Limit:           limit,
+		TotalFiles:      totalFiles,
+		TotalPages:      totalPages,
+		WebAddress:      resolveWebAddress(r, s.proxyPath, s.proxyPort),
 	}
 
 	w.Header().Set("Vary", "Accept")
@@ -798,50 +822,164 @@ func (s *Server) deleteDirHandler(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprintf(w, "Deleted %d file(s) from directory %s\n", deletedCount, dirToken)
 }
 
-// dirZipHandler handles GET /{token}/.zip: it downloads all files in a directory
-// as a zip archive.
-func (s *Server) dirZipHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	dirToken := vars["token"]
+// archiveManifest contains metadata about an archive being created.
+type archiveManifest struct {
+	Token        string
+	Subpath      string
+	Created      time.Time
+	FileCount    int
+	TotalSize    int64
+	SkippedFiles []string
+}
 
+// filterFilesBySubpath filters directory files to only include those under the given subpath.
+func filterFilesBySubpath(files []fileEntry, subpath string) []fileEntry {
+	if subpath == "" {
+		return files
+	}
+
+	var filtered []fileEntry
+	prefix := subpath + "/"
+	for _, f := range files {
+		if strings.HasPrefix(f.Name, prefix) || f.Name == subpath {
+			filtered = append(filtered, f)
+		}
+	}
+	return filtered
+}
+
+// validateDirForArchive checks if a directory is valid for archive creation.
+// Returns the directory index and sanitized subpath if valid, or writes an error response and returns nil.
+func (s *Server) validateDirForArchive(w http.ResponseWriter, r *http.Request, dirToken, subpath string) (*dirIndex, string) {
 	if len(dirToken) > maxTokenLength {
 		s.respondError(w, http.StatusBadRequest, "token too long", "")
-		return
+		return nil, ""
+	}
+
+	if subpath != "" {
+		subpath = sanitizePath(subpath)
+		if subpath == "" || subpath == "_" {
+			s.respondError(w, http.StatusBadRequest, "invalid subpath", "")
+			return nil, ""
+		}
 	}
 
 	idx, err := s.loadDirIndex(r.Context(), dirToken)
 	if err != nil {
 		s.respondError(w, http.StatusNotFound, "", "directory: %v", err)
-		return
+		return nil, ""
 	}
 
-	if len(idx.Files) == 0 {
-		s.respondError(w, http.StatusNotFound, "Directory is empty", "")
-		return
+	// Filter files by subpath if provided
+	filteredFiles := filterFilesBySubpath(idx.Files, subpath)
+	if len(filteredFiles) == 0 {
+		if subpath != "" {
+			s.respondError(w, http.StatusNotFound, "Subdirectory is empty", "")
+		} else {
+			s.respondError(w, http.StatusNotFound, "Directory is empty", "")
+		}
+		return nil, ""
 	}
 
 	maxFiles := s.maxArchiveFiles
 	if maxFiles <= 0 {
 		maxFiles = defaultMaxArchiveFiles
 	}
-	if len(idx.Files) > maxFiles {
-		s.respondError(w, http.StatusBadRequest, fmt.Sprintf("Too many files in directory (max %d)", maxFiles), "")
+	if len(filteredFiles) > maxFiles {
+		s.respondError(w, http.StatusBadRequest, fmt.Sprintf("Too many files in archive (max %d)", maxFiles), "")
+		return nil, ""
+	}
+
+	// Check archive size limit
+	if s.maxArchiveSize > 0 {
+		var totalSize int64
+		for _, f := range filteredFiles {
+			totalSize += f.Size
+		}
+		if totalSize > s.maxArchiveSize {
+			s.respondError(w, http.StatusBadRequest, fmt.Sprintf("Archive too large (max %d bytes)", s.maxArchiveSize), "")
+			return nil, ""
+		}
+	}
+
+	// Update the index with filtered files
+	idx.Files = filteredFiles
+	return &idx, subpath
+}
+
+// preflightArchiveFiles checks if files in a directory can be fetched
+// for archive creation without incrementing download counts.
+// Uses metadata-first validation to minimize storage reads.
+// Returns the number of files that can be fetched.
+func (s *Server) preflightArchiveFiles(ctx context.Context, dirToken string, files []fileEntry, password string) int {
+	var fetchableCount int
+	for _, entry := range files {
+		if s.preflightArchiveFile(ctx, dirToken, entry.Name, password) {
+			fetchableCount++
+		}
+	}
+	return fetchableCount
+}
+
+// generateManifest creates a manifest file content for the archive.
+func generateManifest(manifest archiveManifest) string {
+	var sb strings.Builder
+	_, _ = sb.WriteString("# transfer.ng Archive Manifest\n")
+	_, _ = fmt.Fprintf(&sb, "Token: %s\n", manifest.Token)
+	if manifest.Subpath != "" {
+		_, _ = fmt.Fprintf(&sb, "Subpath: %s\n", manifest.Subpath)
+	}
+	_, _ = fmt.Fprintf(&sb, "Created: %s\n", manifest.Created.UTC().Format(time.RFC3339))
+	_, _ = fmt.Fprintf(&sb, "Files: %d\n", manifest.FileCount)
+	_, _ = fmt.Fprintf(&sb, "Total Size: %d bytes\n", manifest.TotalSize)
+	if len(manifest.SkippedFiles) > 0 {
+		_, _ = sb.WriteString("\n# Skipped Files:\n")
+		for _, f := range manifest.SkippedFiles {
+			_, _ = fmt.Fprintf(&sb, "# - %s\n", f)
+		}
+	}
+	return sb.String()
+}
+
+// dirZipHandler handles GET /zip/{token}/ and /zip/{token}/{subpath}:
+// it downloads files in a directory (or subdirectory) as a zip archive.
+func (s *Server) dirZipHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	dirToken := vars["token"]
+	subpath := vars["subpath"]
+
+	idx, subpath := s.validateDirForArchive(w, r, dirToken, subpath)
+	if idx == nil {
 		return
 	}
 
-	zipfilename := fmt.Sprintf("directory-%s-%d.zip", dirToken, time.Now().UnixNano())
+	password := r.Header.Get("X-Decrypt-Password")
+	fetchableCount := s.preflightArchiveFiles(r.Context(), dirToken, idx.Files, password)
+	if fetchableCount == 0 {
+		s.respondError(w, http.StatusBadRequest, "No downloadable files in directory", "")
+		return
+	}
+
+	zipfilename := fmt.Sprintf("directory-%s", dirToken)
+	if subpath != "" {
+		zipfilename = fmt.Sprintf("%s-%s", zipfilename, strings.ReplaceAll(subpath, "/", "-"))
+	}
+	zipfilename = fmt.Sprintf("%s.zip", zipfilename)
 	w.Header().Set("Content-Type", "application/zip")
 	commonHeader(w, zipfilename)
 
 	zw := zip.NewWriter(w)
 	defer func() { _ = zw.Close() }()
-	password := r.Header.Get("X-Decrypt-Password")
 
 	var addedFiles int
+	var totalSize int64
+	var skippedFiles []string
+
 	for _, entry := range idx.Files {
-		reader, _, err := s.fetchFileForArchive(r.Context(), dirToken, entry.Name, password)
+		reader, contentLength, err := s.fetchFileForArchive(r.Context(), dirToken, entry.Name, password, true)
 		if err != nil {
 			s.logger.Printf("directory: skipping %s/%s in zip: %v", dirToken, entry.Name, err)
+			skippedFiles = append(skippedFiles, entry.Name)
 			continue
 		}
 
@@ -855,6 +993,7 @@ func (s *Server) dirZipHandler(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			storage.CloseCheck(reader)
 			s.logger.Printf("directory: failed to create zip entry for %s: %v", entry.Name, err)
+			skippedFiles = append(skippedFiles, entry.Name)
 			continue
 		}
 
@@ -862,9 +1001,31 @@ func (s *Server) dirZipHandler(w http.ResponseWriter, r *http.Request) {
 		storage.CloseCheck(reader)
 		if err != nil {
 			s.logger.Printf("directory: failed to copy %s to zip: %v", entry.Name, err)
+			skippedFiles = append(skippedFiles, entry.Name)
 			continue
 		}
 		addedFiles++
+		totalSize += storage.SafeUint64ToInt64(contentLength)
+	}
+
+	// Add manifest file
+	manifest := archiveManifest{
+		Token:        dirToken,
+		Subpath:      subpath,
+		Created:      time.Now(),
+		FileCount:    addedFiles,
+		TotalSize:    totalSize,
+		SkippedFiles: skippedFiles,
+	}
+	manifestContent := generateManifest(manifest)
+	manifestHeader := &zip.FileHeader{
+		Name:     "_transfer-ng-manifest.txt",
+		Method:   zip.Store,
+		Modified: time.Now().UTC(),
+	}
+	mw, err := zw.CreateHeader(manifestHeader)
+	if err == nil {
+		_, _ = mw.Write([]byte(manifestContent))
 	}
 
 	if addedFiles == 0 {
@@ -872,38 +1033,30 @@ func (s *Server) dirZipHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// dirTarGzHandler handles GET /{token}/.tar.gz: it downloads all files in a
-// directory as a tar.gz archive.
+// dirTarGzHandler handles GET /tar.gz/{token}/ and /tar.gz/{token}/{subpath}:
+// it downloads files in a directory (or subdirectory) as a tar.gz archive.
 func (s *Server) dirTarGzHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	dirToken := vars["token"]
+	subpath := vars["subpath"]
 
-	if len(dirToken) > maxTokenLength {
-		s.respondError(w, http.StatusBadRequest, "token too long", "")
+	idx, subpath := s.validateDirForArchive(w, r, dirToken, subpath)
+	if idx == nil {
 		return
 	}
 
-	idx, err := s.loadDirIndex(r.Context(), dirToken)
-	if err != nil {
-		s.respondError(w, http.StatusNotFound, "", "directory: %v", err)
+	password := r.Header.Get("X-Decrypt-Password")
+	fetchableCount := s.preflightArchiveFiles(r.Context(), dirToken, idx.Files, password)
+	if fetchableCount == 0 {
+		s.respondError(w, http.StatusBadRequest, "No downloadable files in directory", "")
 		return
 	}
 
-	if len(idx.Files) == 0 {
-		s.respondError(w, http.StatusNotFound, "Directory is empty", "")
-		return
+	tarfilename := fmt.Sprintf("directory-%s", dirToken)
+	if subpath != "" {
+		tarfilename = fmt.Sprintf("%s-%s", tarfilename, strings.ReplaceAll(subpath, "/", "-"))
 	}
-
-	maxFiles := s.maxArchiveFiles
-	if maxFiles <= 0 {
-		maxFiles = defaultMaxArchiveFiles
-	}
-	if len(idx.Files) > maxFiles {
-		s.respondError(w, http.StatusBadRequest, fmt.Sprintf("Too many files in directory (max %d)", maxFiles), "")
-		return
-	}
-
-	tarfilename := fmt.Sprintf("directory-%s-%d.tar.gz", dirToken, time.Now().UnixNano())
+	tarfilename = fmt.Sprintf("%s.tar.gz", tarfilename)
 	w.Header().Set("Content-Type", "application/x-gzip")
 	commonHeader(w, tarfilename)
 
@@ -912,13 +1065,16 @@ func (s *Server) dirTarGzHandler(w http.ResponseWriter, r *http.Request) {
 
 	zw := tar.NewWriter(gw)
 	defer storage.CloseCheck(zw)
-	password := r.Header.Get("X-Decrypt-Password")
 
 	var addedFiles int
+	var totalSize int64
+	var skippedFiles []string
+
 	for _, entry := range idx.Files {
-		reader, contentLength, err := s.fetchFileForArchive(r.Context(), dirToken, entry.Name, password)
+		reader, contentLength, err := s.fetchFileForArchive(r.Context(), dirToken, entry.Name, password, true)
 		if err != nil {
 			s.logger.Printf("directory: skipping %s/%s in tar.gz: %v", dirToken, entry.Name, err)
+			skippedFiles = append(skippedFiles, entry.Name)
 			continue
 		}
 
@@ -930,16 +1086,37 @@ func (s *Server) dirTarGzHandler(w http.ResponseWriter, r *http.Request) {
 		if err := zw.WriteHeader(header); err != nil {
 			storage.CloseCheck(reader)
 			s.logger.Printf("directory: failed to write header for %s: %v", entry.Name, err)
+			skippedFiles = append(skippedFiles, entry.Name)
 			continue
 		}
 
 		if _, err := io.Copy(zw, reader); err != nil {
 			storage.CloseCheck(reader)
 			s.logger.Printf("directory: failed to copy %s to tar: %v", entry.Name, err)
+			skippedFiles = append(skippedFiles, entry.Name)
 			continue
 		}
 		storage.CloseCheck(reader)
 		addedFiles++
+		totalSize += storage.SafeUint64ToInt64(contentLength)
+	}
+
+	// Add manifest file
+	manifest := archiveManifest{
+		Token:        dirToken,
+		Subpath:      subpath,
+		Created:      time.Now(),
+		FileCount:    addedFiles,
+		TotalSize:    totalSize,
+		SkippedFiles: skippedFiles,
+	}
+	manifestContent := generateManifest(manifest)
+	manifestHeader := &tar.Header{
+		Name: "_transfer-ng-manifest.txt",
+		Size: int64(len(manifestContent)),
+	}
+	if err := zw.WriteHeader(manifestHeader); err == nil {
+		_, _ = zw.Write([]byte(manifestContent))
 	}
 
 	if addedFiles == 0 {
@@ -947,56 +1124,58 @@ func (s *Server) dirTarGzHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// dirZipHeadHandler handles HEAD /{token}/.zip: it returns archive headers
-// without generating the archive body.
+// dirZipHeadHandler handles HEAD /zip/{token}/ and /zip/{token}/{subpath}:
+// it returns archive headers without generating the archive body.
 func (s *Server) dirZipHeadHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	dirToken := vars["token"]
+	subpath := vars["subpath"]
 
-	if len(dirToken) > maxTokenLength {
-		s.respondError(w, http.StatusBadRequest, "token too long", "")
+	idx, subpath := s.validateDirForArchive(w, r, dirToken, subpath)
+	if idx == nil {
 		return
 	}
 
-	idx, err := s.loadDirIndex(r.Context(), dirToken)
-	if err != nil {
-		s.respondError(w, http.StatusNotFound, "", "directory: %v", err)
+	password := r.Header.Get("X-Decrypt-Password")
+	fetchableCount := s.preflightArchiveFiles(r.Context(), dirToken, idx.Files, password)
+	if fetchableCount == 0 {
+		s.respondError(w, http.StatusBadRequest, "No downloadable files in directory", "")
 		return
 	}
 
-	if len(idx.Files) == 0 {
-		s.respondError(w, http.StatusNotFound, "Directory is empty", "")
-		return
+	zipfilename := fmt.Sprintf("directory-%s", dirToken)
+	if subpath != "" {
+		zipfilename = fmt.Sprintf("%s-%s", zipfilename, strings.ReplaceAll(subpath, "/", "-"))
 	}
-
-	zipfilename := fmt.Sprintf("directory-%s.zip", dirToken)
+	zipfilename = fmt.Sprintf("%s.zip", zipfilename)
 	w.Header().Set("Content-Type", "application/zip")
 	commonHeader(w, zipfilename)
 }
 
-// dirTarGzHeadHandler handles HEAD /{token}/.tar.gz: it returns archive headers
-// without generating the archive body.
+// dirTarGzHeadHandler handles HEAD /tar.gz/{token}/ and /tar.gz/{token}/{subpath}:
+// it returns archive headers without generating the archive body.
 func (s *Server) dirTarGzHeadHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	dirToken := vars["token"]
+	subpath := vars["subpath"]
 
-	if len(dirToken) > maxTokenLength {
-		s.respondError(w, http.StatusBadRequest, "token too long", "")
+	idx, subpath := s.validateDirForArchive(w, r, dirToken, subpath)
+	if idx == nil {
 		return
 	}
 
-	idx, err := s.loadDirIndex(r.Context(), dirToken)
-	if err != nil {
-		s.respondError(w, http.StatusNotFound, "", "directory: %v", err)
+	password := r.Header.Get("X-Decrypt-Password")
+	fetchableCount := s.preflightArchiveFiles(r.Context(), dirToken, idx.Files, password)
+	if fetchableCount == 0 {
+		s.respondError(w, http.StatusBadRequest, "No downloadable files in directory", "")
 		return
 	}
 
-	if len(idx.Files) == 0 {
-		s.respondError(w, http.StatusNotFound, "Directory is empty", "")
-		return
+	tarfilename := fmt.Sprintf("directory-%s", dirToken)
+	if subpath != "" {
+		tarfilename = fmt.Sprintf("%s-%s", tarfilename, strings.ReplaceAll(subpath, "/", "-"))
 	}
-
-	tarfilename := fmt.Sprintf("directory-%s.tar.gz", dirToken)
+	tarfilename = fmt.Sprintf("%s.tar.gz", tarfilename)
 	w.Header().Set("Content-Type", "application/x-gzip")
 	commonHeader(w, tarfilename)
 }

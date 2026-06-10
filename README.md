@@ -114,9 +114,20 @@ curl https://transfer.morawski.my/abcd1234/
 ### Download as archive
 
 ```bash
-curl -O https://transfer.morawski.my/abcd1234/.zip
-curl -O https://transfer.morawski.my/abcd1234/.tar.gz
+# Download entire directory as zip
+curl -O https://transfer.morawski.my/zip/abcd1234/
+
+# Download entire directory as tar.gz
+curl -O https://transfer.morawski.my/tar.gz/abcd1234/
+
+# Download a subdirectory as zip
+curl -O https://transfer.morawski.my/zip/abcd1234/photos/2026/
+
+# Download a subdirectory as tar.gz
+curl -O https://transfer.morawski.my/tar.gz/abcd1234/photos/2026/
 ```
+
+Archives include a `_transfer-ng-manifest.txt` file with metadata about the archive contents.
 
 ### Nested paths
 

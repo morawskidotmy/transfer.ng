@@ -113,6 +113,27 @@
       margin-bottom: 10px;
       text-transform: uppercase;
     }
+    .download-section {
+      display: flex;
+      gap: 10px;
+      margin: 15px 0;
+      padding: 10px;
+      background: #2c2f33;
+      border: 1px solid #36393f;
+    }
+    .download-btn {
+      color: var(--discord-white);
+      text-decoration: none;
+      padding: 8px 16px;
+      border: 1px solid var(--discord-blue);
+      background: transparent;
+      font-family: "Courier New", monospace;
+      font-size: 0.9em;
+    }
+    .download-btn:hover {
+      background: var(--discord-blue);
+      color: var(--discord-white);
+    }
   </style>
 </head>
 <body>
@@ -148,6 +169,13 @@
         {{.TotalFiles}} file(s)
       {{end}}
     </div>
+
+    {{if .HasArchiveFiles}}
+    <div class="download-section">
+      <a href="{{.ZipURL}}" class="download-btn">[ DOWNLOAD FULL DIRECTORY AS ZIP ]</a>
+      <a href="{{.TarGzURL}}" class="download-btn">[ DOWNLOAD FULL DIRECTORY AS TAR.GZ ]</a>
+    </div>
+    {{end}}
 
     {{if .Files}}
     <ul class="files">

@@ -99,8 +99,8 @@ $ curl -i -F filedata=@/tmp/hello.txt -F filedata=@/tmp/hello2.txt https://trans
 
 ### Combining downloads as zip or tar.gz archive
 ```bash
-$ curl https://transfer.sh/(15HKz/hello.txt,15HKz/hello.txt).tar.gz
-$ curl https://transfer.sh/(15HKz/hello.txt,15HKz/hello.txt).zip 
+$ curl https://transfer.sh/archive/tar.gz/15HKz/hello.txt,15HKz/hello.txt
+$ curl https://transfer.sh/archive/zip/15HKz/hello.txt,15HKz/hello.txt
 ```
 
 ### Transfer and send email with link (using an alias)
