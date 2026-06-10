@@ -12,10 +12,16 @@ Archive File Cap:   {{.ArchiveMax}}
 Compression:        {{.CompressLarge}}
 {{if .EmailContact}}Contact:   {{.EmailContact}}{{end}}
 
-INSTALL SHELL HELPER
-====================
-curl -sL https://raw.githubusercontent.com/morawskidotmy/transfer.ng/main/extras/transfer.sh >> ~/.bashrc
-curl -sL https://raw.githubusercontent.com/morawskidotmy/transfer.ng/main/extras/transfer.sh >> ~/.zshrc
+TRANSFER CLI (RECOMMENDED)
+==========================
+Install the fast CLI client with parallel uploads, directory support, and automatic retries:
+curl -sL https://raw.githubusercontent.com/morawskidotmy/transfer.ng/main/install-transfer.sh | bash
+
+Then upload files and directories easily:
+transfer file.txt           # Single file
+transfer file1 file2 file3  # Multiple files
+transfer myfolder/          # Directory (preserves structure)
+transfer --workers=16 big/  # Custom parallelism
 
 UPLOAD FILE
 ===========

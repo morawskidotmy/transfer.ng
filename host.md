@@ -14,6 +14,21 @@ Test it:
 curl --upload-file hello.txt http://localhost:8080/hello.txt
 ```
 
+## Client Upload Utility
+
+For users who want a fast CLI client with parallel uploads, directory support, and automatic retries, see the [Transfer CLI](README.md#transfer-cli) section in the main README.
+
+```bash
+# Install the transfer CLI
+curl -sL https://raw.githubusercontent.com/morawskidotmy/transfer.ng/main/install-transfer.sh | bash
+
+# Upload files and directories
+transfer file.txt
+transfer myfolder/
+```
+
+The CLI supports custom hosts via `--host` or `TRANSFER_HOST` environment variable, making it easy to use with self-hosted instances.
+
 ## All Flags
 
 ### Network

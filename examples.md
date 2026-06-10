@@ -1,6 +1,6 @@
 # Table of Contents
 
-* [Aliases](#aliases)
+* [Transfer CLI (Recommended)](#transfer-cli-recommended)
 * [Uploading and downloading](#uploading-and-downloading)
 * [Archiving and backups](#archiving-and-backups)
 * [Encrypting and decrypting](#encrypting-and-decrypting)
@@ -8,79 +8,43 @@
 * [Uploading and copy download command](#uploading-and-copy-download-command)
 * [Uploading and displaying URL and deletion token](#uploading-and-displaying-url-and-deletion-token)
 
-## Aliases
-<a name="aliases"/>
+## Transfer CLI (Recommended)
+<a name="transfer-cli-recommended"/>
 
-## Add alias to .bashrc or .zshrc
+The fastest way to upload files and directories with parallel uploads, automatic retries, and progress tracking:
 
-### Using curl
 ```bash
-transfer() {
-    curl --progress-bar --upload-file "$1" https://transfer.sh/$(basename "$1") | tee /dev/null;
-    echo
-}
+# Install the CLI (builds from source, installs to ~/.local/bin)
+curl -sL https://raw.githubusercontent.com/morawskidotmy/transfer.ng/main/install-transfer.sh | bash
 
-alias transfer=transfer
+# Upload a single file
+transfer file.txt
+
+# Upload multiple files
+transfer file1.txt file2.txt file3.txt
+
+# Upload a directory (preserves folder structure)
+transfer myfolder/
+
+# Upload with custom parallelism
+transfer --workers=16 largefolder/
+
+# Use with self-hosted instance
+transfer --host=https://my.server.com file.txt
 ```
 
-### Using wget
-```bash
-transfer() {
-    wget -t 1 -qO - --method=PUT --body-file="$1" --header="Content-Type: $(file -b --mime-type "$1")" https://transfer.sh/$(basename "$1");
-    echo
-}
+**Features:**
+- Parallel uploads with configurable worker pool (default: 8 workers)
+- Directory support with preserved folder structure
+- Multiple file/directory arguments in a single command
+- Automatic retry with exponential backoff (default: 3 retries)
+- Colored progress output
+- Configurable via flags and environment variables
 
-alias transfer=transfer
-```
-
-## Add alias for fish-shell
-
-### Using curl
-```fish
-function transfer --description 'Upload a file to transfer.sh'
-    if [ $argv[1] ]
-        # write to output to tmpfile because of progress bar
-        set -l tmpfile ( mktemp -t transferXXXXXX )
-        curl --progress-bar --upload-file "$argv[1]" https://transfer.sh/(basename $argv[1]) >> $tmpfile
-        cat $tmpfile
-        command rm -f $tmpfile
-    else
-        echo 'usage: transfer FILE_TO_TRANSFER'
-    end
-end
-
-funcsave transfer
-```
-
-### Using wget
-```fish
-function transfer --description 'Upload a file to transfer.sh'
-    if [ $argv[1] ]
-        wget -t 1 -qO - --method=PUT --body-file="$argv[1]" --header="Content-Type: (file -b --mime-type $argv[1])" https://transfer.sh/(basename $argv[1])
-    else
-        echo 'usage: transfer FILE_TO_TRANSFER'
-    end
-end
-
-funcsave transfer
-```
-
-Now run it like this:
-```bash
-$ transfer test.txt
-```
-
-## Add alias on Windows
-
-Put a file called `transfer.cmd` somewhere in your PATH with this inside it:
-```cmd
-@echo off
-setlocal
-:: use env vars to pass names to PS, to avoid escaping issues
-set FN=%~nx1
-set FULL=%1
-powershell -noprofile -command "$(Invoke-Webrequest -Method put -Infile $Env:FULL https://transfer.sh/$Env:FN).Content"
-```
+**Environment Variables:**
+- `TRANSFER_HOST` - Server URL (default: https://transfer.morawski.my)
+- `TRANSFER_WORKERS` - Number of parallel workers (default: 8)
+- `TRANSFER_MAX_RETRIES` - Maximum retry attempts (default: 3)
 
 ## Uploading and Downloading
 <a name="uploading-and-downloading"/>
