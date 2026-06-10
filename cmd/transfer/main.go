@@ -2,31 +2,52 @@ package main
 
 import (
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/fatih/color"
+	"golang.org/x/term"
+)
+
+var (
+	Version     = "dev"
+	BuildCommit = "unknown"
 )
 
 const (
 	defaultHost       = "https://transfer.morawski.my"
-	defaultWorkers    = 8
-	defaultMaxRetries = 3
+	defaultWorkers    = 4
+	defaultMaxRetries = 10
+	defaultMinDelay   = 500
+	barWidth          = 30
+
+	githubRepo    = "morawskidotmy/transfer.ng"
+	githubRepoURL = "https://github.com/" + githubRepo + ".git"
+	updateTimeout = 5 * time.Second
 )
 
 type Config struct {
-	Host       string
-	Workers    int
-	MaxRetries int
-	Insecure   bool
+	Host          string
+	Workers       int
+	MaxRetries    int
+	Insecure      bool
+	MinDelay      time.Duration
+	NoUpdateCheck bool
+	ForceUpdate   bool
+	ShowVersion   bool
+	ShowHelp      bool
 }
 
 type UploadResult struct {
@@ -41,6 +62,150 @@ type DirResponse struct {
 	UploadToken  string
 }
 
+type globalThrottle struct {
+	mu       sync.Mutex
+	lastTime time.Time
+	minDelay time.Duration
+	paused   bool
+	pauseEnd time.Time
+}
+
+func newGlobalThrottle(minDelay time.Duration) *globalThrottle {
+	return &globalThrottle{minDelay: minDelay}
+}
+
+func (t *globalThrottle) Wait() {
+	for {
+		t.mu.Lock()
+		now := time.Now()
+
+		if t.paused && now.Before(t.pauseEnd) {
+			waitUntil := t.pauseEnd
+			t.mu.Unlock()
+			time.Sleep(time.Until(waitUntil))
+			continue
+		}
+		t.paused = false
+
+		if !t.lastTime.IsZero() {
+			elapsed := now.Sub(t.lastTime)
+			if elapsed < t.minDelay {
+				sleepFor := t.minDelay - elapsed
+				t.mu.Unlock()
+				time.Sleep(sleepFor)
+				t.mu.Lock()
+			}
+		}
+		t.lastTime = time.Now()
+		t.mu.Unlock()
+		return
+	}
+}
+
+func (t *globalThrottle) PauseFor(d time.Duration) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.paused = true
+	t.pauseEnd = time.Now().Add(d)
+}
+
+type progressDisplay struct {
+	mu       sync.Mutex
+	dirURL   string
+	fileName string
+	bytes    int64
+	total    int64
+	isTTY    bool
+}
+
+func newProgressDisplay(dirURL string) *progressDisplay {
+	return &progressDisplay{
+		dirURL: dirURL,
+		isTTY:  term.IsTerminal(int(os.Stdout.Fd())),
+	}
+}
+
+func (p *progressDisplay) Update(fileName string, current, total int64) {
+	p.mu.Lock()
+	p.fileName = fileName
+	p.bytes = current
+	p.total = total
+	p.mu.Unlock()
+	p.render()
+}
+
+func (p *progressDisplay) render() {
+	if !p.isTTY {
+		return
+	}
+
+	p.mu.Lock()
+	name := p.fileName
+	current := p.bytes
+	total := p.total
+	dirURL := p.dirURL
+	p.mu.Unlock()
+
+	var pct float64
+	if total > 0 {
+		pct = float64(current) / float64(total) * 100
+	}
+
+	filled := int(pct / 100 * float64(barWidth))
+	if filled > barWidth {
+		filled = barWidth
+	}
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
+
+	sizeStr := formatBytes(current)
+	if total > 0 {
+		sizeStr += " / " + formatBytes(total)
+	}
+
+	var sb strings.Builder
+	sb.WriteString("\033[2K\r")
+	sb.WriteString(name)
+	sb.WriteString("\n")
+	sb.WriteString("\033[2K\r")
+	sb.WriteString("[")
+	sb.WriteString(bar)
+	fmt.Fprintf(&sb, "] %3.0f%% %s", pct, sizeStr)
+	sb.WriteString("\n")
+	sb.WriteString("\033[2K\r")
+	sb.WriteString(dirURL)
+	sb.WriteString("\033[3A\r")
+
+	fmt.Print(sb.String())
+}
+
+func (p *progressDisplay) Finish() {
+	if p.isTTY {
+		fmt.Print("\033[3B\n")
+	}
+}
+
+func (p *progressDisplay) ShowError(fileName string) {
+	p.mu.Lock()
+	p.fileName = fileName
+	p.bytes = 0
+	p.total = 0
+	p.mu.Unlock()
+	p.render()
+}
+
+func formatBytes(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
@@ -48,9 +213,33 @@ func main() {
 	}
 
 	config := loadConfig()
+
+	if config.ShowHelp {
+		printUsage()
+		os.Exit(0)
+	}
+
+	if config.ShowVersion {
+		fmt.Printf("transfer %s (%s)\n", Version, BuildCommit)
+		os.Exit(0)
+	}
+
+	if config.ForceUpdate {
+		if err := selfUpdate(config, true); err != nil {
+			fmt.Fprintf(os.Stderr, "Update failed: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
+	if !config.NoUpdateCheck {
+		go func() {
+			_ = selfUpdate(config, false)
+		}()
+	}
+
 	args := os.Args[1:]
 
-	// Collect all files to upload
 	files, basePaths, err := collectFiles(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error collecting files: %v\n", err)
@@ -62,21 +251,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create directory
 	dirResp, err := createDirectory(config)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating directory: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("%s\n", color.CyanString("Directory created: %s", dirResp.DirectoryURL))
-	fmt.Printf("%s\n\n", color.YellowString("Uploading %d file(s) with %d workers...", len(files), config.Workers))
+	display := newProgressDisplay(dirResp.DirectoryURL)
+	throttle := newGlobalThrottle(config.MinDelay)
 
-	// Upload files in parallel
-	results := uploadFiles(config, dirResp, files, basePaths)
+	results := uploadFiles(config, dirResp, files, basePaths, throttle, display)
 
-	// Print results
-	printResults(results)
+	display.Finish()
+
+	printResults(results, dirResp.DirectoryURL)
 }
 
 func loadConfig() Config {
@@ -84,9 +272,9 @@ func loadConfig() Config {
 		Host:       getEnv("TRANSFER_HOST", defaultHost),
 		Workers:    getEnvInt("TRANSFER_WORKERS", defaultWorkers),
 		MaxRetries: getEnvInt("TRANSFER_MAX_RETRIES", defaultMaxRetries),
+		MinDelay:   time.Duration(getEnvInt("TRANSFER_MIN_DELAY", defaultMinDelay)) * time.Millisecond,
 	}
 
-	// Parse command line flags
 	args := []string{}
 	for i := 1; i < len(os.Args); i++ {
 		arg := os.Args[i]
@@ -97,14 +285,26 @@ func loadConfig() Config {
 			if _, err := fmt.Sscanf(strings.TrimPrefix(arg, "--workers="), "%d", &workers); err == nil {
 				config.Workers = workers
 			}
+		} else if strings.HasPrefix(arg, "--delay=") {
+			var delay int
+			if _, err := fmt.Sscanf(strings.TrimPrefix(arg, "--delay="), "%d", &delay); err == nil {
+				config.MinDelay = time.Duration(delay) * time.Millisecond
+			}
 		} else if arg == "--insecure" {
 			config.Insecure = true
+		} else if arg == "--update" {
+			config.ForceUpdate = true
+		} else if arg == "--no-update-check" {
+			config.NoUpdateCheck = true
+		} else if arg == "--version" || arg == "-v" {
+			config.ShowVersion = true
+		} else if arg == "--help" || arg == "-h" {
+			config.ShowHelp = true
 		} else {
 			args = append(args, arg)
 		}
 	}
 
-	// Update os.Args to only contain file arguments
 	os.Args = append([]string{os.Args[0]}, args...)
 
 	return config
@@ -116,7 +316,6 @@ func collectFiles(args []string) ([]string, []string, error) {
 	seen := make(map[string]bool)
 
 	for _, arg := range args {
-		// Skip flags
 		if strings.HasPrefix(arg, "--") {
 			continue
 		}
@@ -128,7 +327,6 @@ func collectFiles(args []string) ([]string, []string, error) {
 		}
 
 		if info.IsDir() {
-			// Walk directory recursively
 			basePath := filepath.Dir(arg)
 			// #nosec G703 -- arg is user-provided path, this is a CLI tool
 			err := filepath.Walk(arg, func(path string, info os.FileInfo, err error) error {
@@ -206,18 +404,16 @@ func createDirectory(config Config) (*DirResponse, error) {
 	}, nil
 }
 
-func uploadFiles(config Config, dirResp *DirResponse, files []string, basePaths []string) []UploadResult {
+func uploadFiles(config Config, dirResp *DirResponse, files []string, basePaths []string, throttle *globalThrottle, display *progressDisplay) []UploadResult {
 	results := make([]UploadResult, len(files))
 	var completed int64
 
-	// Create work channel
 	work := make(chan int, len(files))
 	for i := range files {
 		work <- i
 	}
 	close(work)
 
-	// Start workers
 	var wg sync.WaitGroup
 	for i := 0; i < config.Workers; i++ {
 		wg.Add(1)
@@ -226,11 +422,15 @@ func uploadFiles(config Config, dirResp *DirResponse, files []string, basePaths 
 			for idx := range work {
 				file := files[idx]
 				basePath := basePaths[idx]
-				result := uploadFileWithRetry(config, dirResp, file, basePath, config.MaxRetries)
+				result := uploadFileWithRetry(config, dirResp, file, basePath, config.MaxRetries, throttle, display)
 				results[idx] = result
 
-				current := atomic.AddInt64(&completed, 1)
-				printProgress(current, int64(len(files)), result)
+				atomic.AddInt64(&completed, 1)
+
+				if !result.Success {
+					display.ShowError(result.Path)
+					time.Sleep(200 * time.Millisecond)
+				}
 			}
 		}()
 	}
@@ -239,18 +439,34 @@ func uploadFiles(config Config, dirResp *DirResponse, files []string, basePaths 
 	return results
 }
 
-func uploadFileWithRetry(config Config, dirResp *DirResponse, filePath string, basePath string, maxRetries int) UploadResult {
+func uploadFileWithRetry(config Config, dirResp *DirResponse, filePath string, basePath string, maxRetries int, throttle *globalThrottle, display *progressDisplay) UploadResult {
 	var lastErr error
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		result := uploadFile(config, dirResp, filePath, basePath)
+		throttle.Wait()
+
+		result := uploadFile(config, dirResp, filePath, basePath, display)
 		if result.Success {
-			return result
+			return UploadResult{
+				Path:    result.Path,
+				URL:     result.URL,
+				Success: result.Success,
+				Error:   result.Error,
+			}
 		}
+
 		lastErr = result.Error
-		if attempt < maxRetries-1 {
-			// Wait before retry with exponential backoff
-			waitTime := (attempt + 1) * 100
-			<-time.After(time.Duration(waitTime) * time.Millisecond)
+
+		if result.Retryable && attempt < maxRetries-1 {
+			waitTime := calculateBackoff(attempt, result.RetryAfter)
+			if result.Retryable {
+				throttle.PauseFor(waitTime)
+			}
+			time.Sleep(waitTime)
+			continue
+		}
+
+		if !result.Retryable {
+			break
 		}
 	}
 	return UploadResult{
@@ -260,11 +476,34 @@ func uploadFileWithRetry(config Config, dirResp *DirResponse, filePath string, b
 	}
 }
 
-func uploadFile(config Config, dirResp *DirResponse, filePath string, basePath string) UploadResult {
-	// Determine the relative path for upload
+func calculateBackoff(attempt int, retryAfter time.Duration) time.Duration {
+	if retryAfter > 0 {
+		return retryAfter
+	}
+
+	base := time.Duration(1<<uint(attempt)) * 500 * time.Millisecond
+	maxWait := 30 * time.Second
+	if base > maxWait {
+		base = maxWait
+	}
+
+	// #nosec G404 -- math/rand is used for retry jitter, not cryptographic purposes
+	jitter := time.Duration(rand.Int63n(int64(base / 2)))
+	return base + jitter
+}
+
+type uploadResult struct {
+	Path       string
+	URL        string
+	Success    bool
+	Error      error
+	Retryable  bool
+	RetryAfter time.Duration
+}
+
+func uploadFile(config Config, dirResp *DirResponse, filePath string, basePath string, display *progressDisplay) uploadResult {
 	relPath := getRelativePath(filePath, basePath)
 
-	// Escape each path component separately to preserve slashes
 	parts := strings.Split(relPath, string(filepath.Separator))
 	escapedParts := make([]string, len(parts))
 	for i, part := range parts {
@@ -274,60 +513,116 @@ func uploadFile(config Config, dirResp *DirResponse, filePath string, basePath s
 
 	uploadURL := fmt.Sprintf("%s%s", dirResp.DirectoryURL, uploadPath)
 
-	// Open file
 	// #nosec G304,G703 -- filePath is user-provided file path, this is a CLI tool designed to upload user files
 	file, err := os.Open(filePath)
 	if err != nil {
-		return UploadResult{Path: filePath, Success: false, Error: err}
+		return uploadResult{Path: filePath, Success: false, Error: err}
 	}
 	defer func() { _ = file.Close() }()
 
-	// Get file info for content length
 	fileInfo, err := file.Stat()
 	if err != nil {
-		return UploadResult{Path: filePath, Success: false, Error: err}
+		return uploadResult{Path: filePath, Success: false, Error: err}
 	}
 
-	// Create PUT request with file body
-	req, err := http.NewRequest("PUT", uploadURL, file)
+	totalSize := fileInfo.Size()
+	progressReader := &progressReaderWrapper{
+		reader:   file,
+		total:    totalSize,
+		fileName: filePath,
+		display:  display,
+	}
+
+	req, err := http.NewRequest("PUT", uploadURL, progressReader)
 	if err != nil {
-		return UploadResult{Path: filePath, Success: false, Error: err}
+		return uploadResult{Path: filePath, Success: false, Error: err}
 	}
 
-	req.ContentLength = fileInfo.Size()
+	req.ContentLength = totalSize
 	req.Header.Set("X-Upload-Token", dirResp.UploadToken)
 
-	// Send request
 	client := newHTTPClient(config)
 	// #nosec G704 -- uploadURL is constructed from user-configurable host, this is intentional for a CLI tool
 	resp, err := client.Do(req)
 	if err != nil {
-		return UploadResult{Path: filePath, Success: false, Error: err}
+		return uploadResult{Path: filePath, Success: false, Error: err, Retryable: true}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	if resp.StatusCode == http.StatusTooManyRequests {
+		retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
+		return uploadResult{
+			Path:       filePath,
+			Success:    false,
+			Error:      fmt.Errorf("rate limited (429)"),
+			Retryable:  true,
+			RetryAfter: retryAfter,
+		}
+	}
+
+	if resp.StatusCode == http.StatusInternalServerError || resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusBadGateway {
+		return uploadResult{
+			Path:      filePath,
+			Success:   false,
+			Error:     fmt.Errorf("server error (%d)", resp.StatusCode),
+			Retryable: true,
+		}
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return UploadResult{
+		return uploadResult{
 			Path:    filePath,
 			Success: false,
 			Error:   fmt.Errorf("upload failed with status %d: %s", resp.StatusCode, string(respBody)),
 		}
 	}
 
-	// Get the actual URL from response
 	respBody, _ := io.ReadAll(resp.Body)
 	fileURL := strings.TrimSpace(string(respBody))
 
-	return UploadResult{
+	return uploadResult{
 		Path:    filePath,
 		URL:     fileURL,
 		Success: true,
 	}
 }
 
+type progressReaderWrapper struct {
+	reader   io.Reader
+	total    int64
+	current  int64
+	fileName string
+	display  *progressDisplay
+}
+
+func (pr *progressReaderWrapper) Read(p []byte) (int, error) {
+	n, err := pr.reader.Read(p)
+	pr.current += int64(n)
+	pr.display.Update(pr.fileName, pr.current, pr.total)
+	return n, err
+}
+
+func parseRetryAfter(value string) time.Duration {
+	if value == "" {
+		return 0
+	}
+
+	if seconds, err := strconv.Atoi(value); err == nil {
+		return time.Duration(seconds) * time.Second
+	}
+
+	if t, err := time.Parse(time.RFC1123, value); err == nil {
+		d := time.Until(t)
+		if d > 0 {
+			return d
+		}
+	}
+
+	return 0
+}
+
 func getRelativePath(filePath string, basePath string) string {
-	// Make both paths absolute
 	absPath, err := filepath.Abs(filePath)
 	if err != nil {
 		return filepath.Base(filePath)
@@ -338,7 +633,6 @@ func getRelativePath(filePath string, basePath string) string {
 		return filepath.Base(filePath)
 	}
 
-	// Try to make relative to basePath
 	relPath, err := filepath.Rel(absBase, absPath)
 	if err != nil {
 		return filepath.Base(filePath)
@@ -347,35 +641,229 @@ func getRelativePath(filePath string, basePath string) string {
 	return relPath
 }
 
-func printProgress(completed, total int64, result UploadResult) {
-	percent := float64(completed) / float64(total) * 100
-	status := color.GreenString("✓")
-	if !result.Success {
-		status = color.RedString("✗")
-	}
-
-	fmt.Printf("%s [%3.0f%%] %s", status, percent, result.Path)
-	if result.Success {
-		fmt.Printf(" → %s\n", color.CyanString(result.URL))
-	} else {
-		fmt.Printf(" → %s\n", color.RedString(result.Error.Error()))
-	}
-}
-
-func printResults(results []UploadResult) {
+func printResults(results []UploadResult, dirURL string) {
 	var success, failed int
+	var failures []UploadResult
 	for _, r := range results {
 		if r.Success {
 			success++
 		} else {
 			failed++
+			failures = append(failures, r)
 		}
 	}
 
-	fmt.Printf("\n%s\n", strings.Repeat("─", 60))
+	fmt.Println()
+	fmt.Printf("%s\n", strings.Repeat("─", 60))
 	fmt.Printf("Upload complete: %s, %s\n",
 		color.GreenString("%d successful", success),
 		color.RedString("%d failed", failed))
+	fmt.Printf("\nDirectory: %s\n", color.CyanString(dirURL))
+
+	if len(failures) > 0 {
+		fmt.Printf("\n%s\n", color.RedString("Failed files:"))
+		for _, f := range failures {
+			fmt.Printf("  %s %s\n", color.RedString("✗"), f.Path)
+			fmt.Printf("    %s\n", color.YellowString(f.Error.Error()))
+		}
+	}
+}
+
+func getCacheDir() string {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(cacheDir, "transfer-cli")
+	_ = os.MkdirAll(dir, 0700)
+	return dir
+}
+
+func shouldCheckUpdate() bool {
+	cacheDir := getCacheDir()
+	if cacheDir == "" {
+		return true
+	}
+
+	markerFile := filepath.Join(cacheDir, ".last-update-check")
+	info, err := os.Stat(markerFile)
+	if err != nil {
+		return true
+	}
+
+	return time.Since(info.ModTime()) > 24*time.Hour
+}
+
+func markUpdateChecked() {
+	cacheDir := getCacheDir()
+	if cacheDir == "" {
+		return
+	}
+
+	markerFile := filepath.Join(cacheDir, ".last-update-check")
+	_ = os.WriteFile(markerFile, []byte(time.Now().Format(time.RFC3339)), 0600)
+}
+
+func getLatestCommit(config Config) (string, error) {
+	client := &http.Client{Timeout: updateTimeout}
+	if config.Insecure {
+		// #nosec G402 -- --insecure is an explicit user opt-out of TLS verification
+		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	}
+
+	req, err := http.NewRequest("GET", "https://api.github.com/repos/"+githubRepo+"/commits/main", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		SHA string `json:"sha"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+
+	return result.SHA, nil
+}
+
+func selfUpdate(config Config, verbose bool) error {
+	if !verbose && !shouldCheckUpdate() {
+		return nil
+	}
+
+	if verbose {
+		fmt.Println("Checking for updates...")
+	}
+
+	latestCommit, err := getLatestCommit(config)
+	if err != nil {
+		if verbose {
+			fmt.Fprintf(os.Stderr, "Failed to check for updates: %v\n", err)
+		}
+		return err
+	}
+
+	markUpdateChecked()
+
+	if BuildCommit == latestCommit {
+		if verbose {
+			fmt.Printf("Already up to date (commit %s)\n", BuildCommit[:7])
+		}
+		return nil
+	}
+
+	if verbose {
+		fmt.Printf("Updating from %s to %s...\n", BuildCommit[:7], latestCommit[:7])
+	}
+
+	if err := buildAndReplace(latestCommit, verbose); err != nil {
+		return err
+	}
+
+	if verbose {
+		fmt.Printf("Updated to commit %s\n", latestCommit[:7])
+	}
+
+	return nil
+}
+
+func buildAndReplace(commit string, verbose bool) error {
+	tmpDir, err := os.MkdirTemp("", "transfer-update-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	if verbose {
+		fmt.Println("Cloning repository...")
+	}
+
+	// #nosec G204 -- githubRepoURL is a constant, tmpDir is a temp directory we created
+	cloneCmd := exec.Command("git", "clone", "--depth", "1", githubRepoURL, tmpDir)
+	cloneCmd.Stdout = nil
+	cloneCmd.Stderr = nil
+	if err := cloneCmd.Run(); err != nil {
+		return fmt.Errorf("failed to clone repository: %w", err)
+	}
+
+	if verbose {
+		fmt.Println("Building binary...")
+	}
+
+	// #nosec G204 -- commit is from GitHub API for our own repo, tmpDir is a temp directory we created
+	buildCmd := exec.Command("go", "build",
+		"-ldflags", fmt.Sprintf("-X main.Version=%s -X main.BuildCommit=%s", commit[:7], commit),
+		"-o", filepath.Join(tmpDir, "transfer"),
+		"./cmd/transfer")
+	buildCmd.Dir = tmpDir
+	buildCmd.Stdout = nil
+	buildCmd.Stderr = nil
+	if err := buildCmd.Run(); err != nil {
+		return fmt.Errorf("failed to build binary: %w", err)
+	}
+
+	// #nosec G304 -- tmpDir is a temp directory we created, not user input
+	newBinary, err := os.ReadFile(filepath.Join(tmpDir, "transfer"))
+	if err != nil {
+		return fmt.Errorf("failed to read built binary: %w", err)
+	}
+
+	if _, err := replaceExecutable(newBinary); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func replaceExecutable(binaryData []byte) (string, error) {
+	execPath, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("failed to get executable path: %w", err)
+	}
+
+	execPath, err = filepath.EvalSymlinks(execPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve executable path: %w", err)
+	}
+
+	info, err := os.Stat(execPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to stat executable: %w", err)
+	}
+
+	tmpBinary := execPath + ".new"
+	// #nosec G306,G703 -- binary needs execute permission, tmpBinary is derived from current executable path
+	if err := os.WriteFile(tmpBinary, binaryData, info.Mode().Perm()); err != nil {
+		return "", fmt.Errorf("failed to write new binary: %w", err)
+	}
+
+	backupPath := execPath + ".bak"
+	_ = os.Remove(backupPath)
+
+	if err := os.Rename(execPath, backupPath); err != nil {
+		_ = os.Remove(tmpBinary)
+		return "", fmt.Errorf("failed to backup current binary: %w", err)
+	}
+
+	if err := os.Rename(tmpBinary, execPath); err != nil {
+		_ = os.Rename(backupPath, execPath)
+		return "", fmt.Errorf("failed to replace binary: %w", err)
+	}
+
+	_ = os.Remove(backupPath)
+
+	return execPath, nil
 }
 
 func printUsage() {
@@ -385,20 +873,27 @@ func printUsage() {
 	fmt.Println("  transfer [options] <file|directory> [file2 ...]")
 	fmt.Println()
 	fmt.Println("Options:")
-	fmt.Println("  --host=URL        Server URL (default: https://transfer.morawski.my)")
-	fmt.Println("  --workers=N       Number of parallel upload workers (default: 8)")
-	fmt.Println("  --insecure        Disable TLS verification")
+	fmt.Println("  --host=URL           Server URL (default: https://transfer.morawski.my)")
+	fmt.Println("  --workers=N          Number of parallel upload workers (default: 4)")
+	fmt.Println("  --delay=MS           Minimum delay between requests in ms (default: 500)")
+	fmt.Println("  --insecure           Disable TLS verification")
+	fmt.Println("  --update             Check for and install updates")
+	fmt.Println("  --no-update-check    Skip automatic update check")
+	fmt.Println("  --version, -v        Show version")
+	fmt.Println("  --help, -h           Show this help message")
 	fmt.Println()
 	fmt.Println("Environment variables:")
 	fmt.Println("  TRANSFER_HOST          Server URL")
 	fmt.Println("  TRANSFER_WORKERS       Number of parallel workers")
-	fmt.Println("  TRANSFER_MAX_RETRIES   Maximum retry attempts (default: 3)")
+	fmt.Println("  TRANSFER_MAX_RETRIES   Maximum retry attempts (default: 10)")
+	fmt.Println("  TRANSFER_MIN_DELAY     Minimum delay between requests in ms (default: 500)")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  transfer file.txt")
 	fmt.Println("  transfer file1.txt file2.txt file3.txt")
 	fmt.Println("  transfer myfolder/")
-	fmt.Println("  transfer --workers=16 largefolder/")
+	fmt.Println("  transfer --workers=2 largefolder/")
+	fmt.Println("  transfer --update")
 }
 
 func getEnv(key, defaultValue string) string {

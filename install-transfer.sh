@@ -29,8 +29,14 @@ if [ ! -d "cmd/transfer" ]; then
     exit 1
 fi
 
-echo "Building binary..."
-if ! go build -o "${BINARY_NAME}" ./cmd/transfer; then
+# Get version from git tags and commit hash
+VERSION=$(git describe --tags --always 2>/dev/null || echo "dev")
+COMMIT=$(git rev-parse HEAD)
+echo "Building binary (version: ${VERSION}, commit: ${COMMIT:0:7})..."
+
+# Build with version and commit embedded
+LDFLAGS="-X main.Version=${VERSION} -X main.BuildCommit=${COMMIT}"
+if ! go build -ldflags "${LDFLAGS}" -o "${BINARY_NAME}" ./cmd/transfer; then
     echo "Error: Failed to build binary"
     echo "Make sure you have Go installed (https://golang.org/dl/)"
     exit 1
@@ -76,5 +82,6 @@ echo "Usage:"
 echo "  transfer file.txt"
 echo "  transfer file1.txt file2.txt"
 echo "  transfer myfolder/"
+echo "  transfer --update"
 echo ""
-echo "For more options, run: transfer"
+echo "For more options, run: transfer --help"
