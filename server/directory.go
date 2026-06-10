@@ -946,3 +946,57 @@ func (s *Server) dirTarGzHandler(w http.ResponseWriter, r *http.Request) {
 		s.logger.Printf("directory: no valid files found for tar.gz archive %s", dirToken)
 	}
 }
+
+// dirZipHeadHandler handles HEAD /{token}/.zip: it returns archive headers
+// without generating the archive body.
+func (s *Server) dirZipHeadHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	dirToken := vars["token"]
+
+	if len(dirToken) > maxTokenLength {
+		s.respondError(w, http.StatusBadRequest, "token too long", "")
+		return
+	}
+
+	idx, err := s.loadDirIndex(r.Context(), dirToken)
+	if err != nil {
+		s.respondError(w, http.StatusNotFound, "", "directory: %v", err)
+		return
+	}
+
+	if len(idx.Files) == 0 {
+		s.respondError(w, http.StatusNotFound, "Directory is empty", "")
+		return
+	}
+
+	zipfilename := fmt.Sprintf("directory-%s.zip", dirToken)
+	w.Header().Set("Content-Type", "application/zip")
+	commonHeader(w, zipfilename)
+}
+
+// dirTarGzHeadHandler handles HEAD /{token}/.tar.gz: it returns archive headers
+// without generating the archive body.
+func (s *Server) dirTarGzHeadHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	dirToken := vars["token"]
+
+	if len(dirToken) > maxTokenLength {
+		s.respondError(w, http.StatusBadRequest, "token too long", "")
+		return
+	}
+
+	idx, err := s.loadDirIndex(r.Context(), dirToken)
+	if err != nil {
+		s.respondError(w, http.StatusNotFound, "", "directory: %v", err)
+		return
+	}
+
+	if len(idx.Files) == 0 {
+		s.respondError(w, http.StatusNotFound, "Directory is empty", "")
+		return
+	}
+
+	tarfilename := fmt.Sprintf("directory-%s.tar.gz", dirToken)
+	w.Header().Set("Content-Type", "application/x-gzip")
+	commonHeader(w, tarfilename)
+}

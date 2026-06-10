@@ -743,6 +743,8 @@ func (s *Server) setupRoutes(r *mux.Router, staticHandler http.Handler) {
 	// Directory-level GET routes must come before catch-all file routes
 	r.HandleFunc("/{token}/.zip", s.dirZipHandler).Methods("GET")
 	r.HandleFunc("/{token}/.tar.gz", s.dirTarGzHandler).Methods("GET")
+	r.HandleFunc("/{token}/.zip", s.dirZipHeadHandler).Methods("HEAD")
+	r.HandleFunc("/{token}/.tar.gz", s.dirTarGzHeadHandler).Methods("HEAD")
 	r.HandleFunc("/{token}/", s.listDirectoryHandler).Methods("GET")
 	r.HandleFunc("/{token}", s.listDirectoryHandler).Methods("GET")
 	r.HandleFunc("/{token}/{subpath:.+}/", s.listDirectoryHandler).Methods("GET")
