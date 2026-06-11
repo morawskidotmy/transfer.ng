@@ -72,7 +72,8 @@ jobs:
               "schemaVersion": 1,
               "label": "diff from transfer.sh",
               "message": f"{pct}%",
-              "color": "blue"
+              "color": "blue",
+              "cacheSeconds": 300
           }
           with open("ng/badge.json", "w") as f:
               json.dump(badge_data, f)
