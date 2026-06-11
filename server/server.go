@@ -12,6 +12,7 @@ import (
 	htmlTemplate "html/template"
 	"log"
 	"mime"
+	"net"
 	"net/http"
 
 	// net/http/pprof registers profiling handlers on the default ServeMux.
@@ -33,7 +34,6 @@ import (
 	gorillaHandlers "github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 	"github.com/tg123/go-htpasswd"
-	"github.com/tomasen/realip"
 	"golang.org/x/crypto/acme/autocert"
 
 	"io/fs"
@@ -388,6 +388,47 @@ func FilterOptions(options IPFilterOptions) OptionFn {
 	}
 }
 
+// TrustedProxies sets the CIDRs of reverse proxies whose forwarded headers
+// (X-Forwarded-For, X-Real-IP, X-Forwarded-Proto) should be trusted.
+// When empty, proxy headers are ignored and RemoteAddr is used directly.
+func TrustedProxies(cidrs string) OptionFn {
+	var nets []*net.IPNet
+	for _, raw := range strings.Split(cidrs, ",") {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		if !strings.Contains(raw, "/") {
+			if strings.Contains(raw, ":") {
+				raw += "/128"
+			} else {
+				raw += "/32"
+			}
+		}
+		if _, ipNet, err := net.ParseCIDR(raw); err == nil {
+			nets = append(nets, ipNet)
+		}
+	}
+	return func(srvr *Server) {
+		srvr.trustedProxies = nets
+	}
+}
+
+// AllowedHosts sets the list of allowed Host header values.
+// When empty, all Host values are accepted.
+func AllowedHosts(hosts string) OptionFn {
+	var hostList []string
+	for _, raw := range strings.Split(hosts, ",") {
+		raw = strings.TrimSpace(raw)
+		if raw != "" {
+			hostList = append(hostList, raw)
+		}
+	}
+	return func(srvr *Server) {
+		srvr.allowedHosts = hostList
+	}
+}
+
 // Server is the main application
 type Server struct {
 	authUser            string
@@ -424,6 +465,10 @@ type Server struct {
 	randomTokenLength int
 
 	ipFilterOptions *IPFilterOptions
+
+	trustedProxies []*net.IPNet
+
+	allowedHosts []string
 
 	VirusTotalKey        string
 	ClamAVDaemonHost     string
@@ -483,8 +528,12 @@ func New(options ...OptionFn) (*Server, error) {
 		optionFn(s)
 	}
 
-	if !s.maxArchiveSizeSet && s.maxUploadSize > 0 {
-		s.maxArchiveSize = s.maxUploadSize * 1024
+	if !s.maxArchiveSizeSet {
+		if s.maxUploadSize > 0 {
+			s.maxArchiveSize = s.maxUploadSize
+		} else {
+			s.maxArchiveSize = defaultMaxUploadSize
+		}
 	}
 
 	tokenA, err := token(s.randomTokenLength)
@@ -499,6 +548,75 @@ func New(options ...OptionFn) (*Server, error) {
 	s.sampleTokenB = tokenB
 
 	return s, nil
+}
+
+// isFromTrustedProxy reports whether r.RemoteAddr belongs to a configured
+// trusted proxy CIDR. When no trusted proxies are configured, it returns false.
+func (s *Server) isFromTrustedProxy(r *http.Request) bool {
+	if len(s.trustedProxies) == 0 {
+		return false
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	for _, n := range s.trustedProxies {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// remoteIP returns the real client IP. When trusted proxies are configured and
+// the request comes from one, it reads X-Forwarded-For / X-Real-IP. Otherwise
+// it falls back to RemoteAddr.
+func (s *Server) remoteIP(r *http.Request) string {
+	if s.isFromTrustedProxy(r) {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			if idx := strings.IndexByte(xff, ','); idx >= 0 {
+				xff = strings.TrimSpace(xff[:idx])
+			}
+			if ip := net.ParseIP(strings.TrimSpace(xff)); ip != nil {
+				return ip.String()
+			}
+		}
+		if xri := r.Header.Get("X-Real-IP"); xri != "" {
+			if ip := net.ParseIP(strings.TrimSpace(xri)); ip != nil {
+				return ip.String()
+			}
+		}
+	}
+	return ipAddrFromRemoteAddr(r.RemoteAddr)
+}
+
+// trustForwardedHeaders reports whether X-Forwarded-Proto and similar headers
+// should be honored for this request.
+func (s *Server) trustForwardedHeaders(r *http.Request) bool {
+	return s.isFromTrustedProxy(r)
+}
+
+// validateHost checks if the Host header is in the allowed list.
+// Returns the host if valid, or empty string if not allowed.
+// When allowedHosts is empty, all hosts are accepted.
+func (s *Server) validateHost(r *http.Request) string {
+	if len(s.allowedHosts) == 0 {
+		return r.Host
+	}
+	host, _, err := net.SplitHostPort(r.Host)
+	if err != nil {
+		host = r.Host
+	}
+	for _, allowed := range s.allowedHosts {
+		if host == allowed || r.Host == allowed {
+			return r.Host
+		}
+	}
+	return ""
 }
 
 //go:embed mime_types.json
@@ -665,6 +783,7 @@ func (s *Server) Run() {
 					handlers.NewLogOptions(s.logger.Printf, "_default_"),
 				),
 				s.ipFilterOptions,
+				s.remoteIP,
 			),
 			nil,
 		),
@@ -768,11 +887,8 @@ func (s *Server) setupRoutes(r *mux.Router, staticHandler http.Handler) {
 	// Shared rate limiter for all archive endpoints
 	var archiveLimiter func(http.Handler) http.Handler
 	if s.rateLimitArchives > 0 {
-		realIPKeyFn := func(r *http.Request) string {
-			return realip.FromRequest(r)
-		}
 		archiveLimiter = func(h http.Handler) http.Handler {
-			return ratelimit.Request(realIPKeyFn).Rate(s.rateLimitArchives, 60*time.Second).LimitBy(memory.New())(h)
+			return ratelimit.Request(s.remoteIP).Rate(s.rateLimitArchives, 60*time.Second).LimitBy(memory.New())(h)
 		}
 	}
 
@@ -818,10 +934,7 @@ func (s *Server) setupRoutes(r *mux.Router, staticHandler http.Handler) {
 
 	getHandlerFn := s.getHandler
 	if s.rateLimitRequests > 0 {
-		realIPKeyFn := func(r *http.Request) string {
-			return realip.FromRequest(r)
-		}
-		getHandlerFn = ratelimit.Request(realIPKeyFn).Rate(s.rateLimitRequests, 60*time.Second).LimitBy(memory.New())(http.HandlerFunc(getHandlerFn)).ServeHTTP
+		getHandlerFn = ratelimit.Request(s.remoteIP).Rate(s.rateLimitRequests, 60*time.Second).LimitBy(memory.New())(http.HandlerFunc(getHandlerFn)).ServeHTTP
 	}
 
 	// Action routes (/get/, /download/, /inline/) must come before the preview
@@ -833,17 +946,22 @@ func (s *Server) setupRoutes(r *mux.Router, staticHandler http.Handler) {
 	var putToDirHandlerFn http.Handler = http.HandlerFunc(s.putToDirHandler)
 	var postHandlerFn http.Handler = http.HandlerFunc(s.postHandler)
 	if s.rateLimitUploads > 0 {
-		realIPKeyFn := func(r *http.Request) string {
-			return realip.FromRequest(r)
-		}
-		putHandlerFn = ratelimit.Request(realIPKeyFn).Rate(s.rateLimitUploads, 60*time.Second).LimitBy(memory.New())(http.HandlerFunc(s.putHandler))
-		putToDirHandlerFn = ratelimit.Request(realIPKeyFn).Rate(s.rateLimitUploads, 60*time.Second).LimitBy(memory.New())(http.HandlerFunc(s.putToDirHandler))
-		postHandlerFn = ratelimit.Request(realIPKeyFn).Rate(s.rateLimitUploads, 60*time.Second).LimitBy(memory.New())(http.HandlerFunc(s.postHandler))
+		putHandlerFn = ratelimit.Request(s.remoteIP).Rate(s.rateLimitUploads, 60*time.Second).LimitBy(memory.New())(http.HandlerFunc(s.putHandler))
+		putToDirHandlerFn = ratelimit.Request(s.remoteIP).Rate(s.rateLimitUploads, 60*time.Second).LimitBy(memory.New())(http.HandlerFunc(s.putToDirHandler))
+		postHandlerFn = ratelimit.Request(s.remoteIP).Rate(s.rateLimitUploads, 60*time.Second).LimitBy(memory.New())(http.HandlerFunc(s.postHandler))
 	}
 
 	r.HandleFunc("/{token}/{filename:.+}", getHandlerFn).Methods("GET")
-	r.HandleFunc("/{filename}/virustotal", s.virusTotalHandler).Methods("PUT")
-	r.HandleFunc("/{filename}/scan", s.scanHandler).Methods("PUT")
+
+	var scanHandlerFn http.Handler = http.HandlerFunc(s.scanHandler)
+	var virusTotalHandlerFn http.Handler = http.HandlerFunc(s.virusTotalHandler)
+	if s.rateLimitUploads > 0 {
+		scanHandlerFn = ratelimit.Request(s.remoteIP).Rate(s.rateLimitUploads, 60*time.Second).LimitBy(memory.New())(http.HandlerFunc(s.scanHandler))
+		virusTotalHandlerFn = ratelimit.Request(s.remoteIP).Rate(s.rateLimitUploads, 60*time.Second).LimitBy(memory.New())(http.HandlerFunc(s.virusTotalHandler))
+	}
+	r.HandleFunc("/{filename}/virustotal", s.requireAuthHandler(virusTotalHandlerFn)).Methods("PUT")
+	r.HandleFunc("/{filename}/scan", s.requireAuthHandler(scanHandlerFn)).Methods("PUT")
+
 	r.HandleFunc("/put/{filename:.+}", s.basicAuthHandler(putHandlerFn)).Methods("PUT")
 	r.HandleFunc("/upload/{filename:.+}", s.basicAuthHandler(putHandlerFn)).Methods("PUT")
 	// putToDirHandler must be registered before the catch-all putHandler. It only

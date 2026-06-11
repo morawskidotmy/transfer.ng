@@ -19,6 +19,8 @@ func (s *Server) virusTotalHandler(w http.ResponseWriter, r *http.Request) {
 
 	s.logger.Printf("Submitting to VirusTotal: %s %d %s", filename, contentLength, contentType)
 
+	s.limitRequestBody(w, r)
+
 	vt, err := virustotal.NewVirusTotal(s.VirusTotalKey)
 	if err != nil {
 		s.logger.Printf("virustotal: failed to create client: %v", err)
@@ -30,6 +32,9 @@ func (s *Server) virusTotalHandler(w http.ResponseWriter, r *http.Request) {
 
 	result, err := vt.Scan(filename, reader)
 	if err != nil {
+		if s.handleUploadError(w, err) {
+			return
+		}
 		s.logger.Printf("virustotal: scan failed: %v", err)
 		http.Error(w, "Could not scan file.", http.StatusInternalServerError)
 		return

@@ -47,7 +47,7 @@ func NewS3Storage(ctx context.Context, accessKey, secretKey, bucketName string, 
 		s3:     client,
 		uploader: manager.NewUploader(client, func(u *manager.Uploader) {
 			if !disableMultipart {
-				u.Concurrency = 20
+				u.Concurrency = 5
 			} else {
 				u.Concurrency = 1
 			}

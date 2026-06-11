@@ -175,6 +175,11 @@ func (f *ipFilter) Wrap(next http.Handler) http.Handler {
 	return &ipFilterMiddleware{ipFilter: f, next: next}
 }
 
+// WrapWithIPFunc wraps the handler using a custom remote IP resolver.
+func (f *ipFilter) WrapWithIPFunc(next http.Handler, remoteIPFn func(*http.Request) string) http.Handler {
+	return &ipFilterMiddleware{ipFilter: f, next: next, remoteIPFn: remoteIPFn}
+}
+
 // WrapIPFilter is equivalent to newIPFilter(opts) then Wrap(next)
 func WrapIPFilter(next http.Handler, opts *IPFilterOptions) http.Handler {
 	return newIPFilter(opts).Wrap(next)
@@ -182,11 +187,17 @@ func WrapIPFilter(next http.Handler, opts *IPFilterOptions) http.Handler {
 
 type ipFilterMiddleware struct {
 	*ipFilter
-	next http.Handler
+	next       http.Handler
+	remoteIPFn func(*http.Request) string
 }
 
 func (m *ipFilterMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	remoteIP := realip.FromRequest(r)
+	var remoteIP string
+	if m.remoteIPFn != nil {
+		remoteIP = m.remoteIPFn(r)
+	} else {
+		remoteIP = realip.FromRequest(r)
+	}
 
 	if !m.Allowed(remoteIP) {
 		//show simple forbidden text

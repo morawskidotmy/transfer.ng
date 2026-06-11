@@ -252,10 +252,6 @@ func (s *Server) deleteDirFileObjects(ctx context.Context, dirToken, filename st
 	if err := s.storage.Delete(ctx, dirToken, filename); err != nil && !s.storage.IsNotExist(err) {
 		return fmt.Errorf("delete %s: %w", filename, err)
 	}
-	metadataName := fmt.Sprintf("%s.metadata", filename)
-	if err := s.storage.Delete(ctx, dirToken, metadataName); err != nil && !s.storage.IsNotExist(err) {
-		return fmt.Errorf("delete %s: %w", metadataName, err)
-	}
 	return nil
 }
 
@@ -358,7 +354,7 @@ func (s *Server) verifyUploadToken(ctx context.Context, dirToken, provided strin
 // directoryURL builds the absolute listing URL for a directory token.
 func (s *Server) directoryURL(r *http.Request, dirToken string) string {
 	relativeURL, _ := url.Parse(path.Join(s.proxyPath, dirToken) + "/")
-	return resolveURL(r, relativeURL, s.proxyPort)
+	return s.resolveURL(r, relativeURL)
 }
 
 // writeDirHeaders adds the directory listing URL and (optionally) the upload
@@ -553,7 +549,7 @@ func filterAndSplitDirEntries(files []fileEntry, subpath string) (subdirs []dirS
 }
 
 // buildBreadcrumbs creates breadcrumb navigation for a subpath.
-func buildBreadcrumbs(r *http.Request, token, subpath, proxyPath, proxyPort string) []breadcrumb {
+func (s *Server) buildBreadcrumbs(r *http.Request, token, subpath string) []breadcrumb {
 	if subpath == "" {
 		return nil
 	}
@@ -570,10 +566,10 @@ func buildBreadcrumbs(r *http.Request, token, subpath, proxyPath, proxyPort stri
 			cumulative = cumulative + "/" + part
 		}
 
-		relativeURL, _ := url.Parse(path.Join(proxyPath, token, escapePathForURL(cumulative)) + "/")
+		relativeURL, _ := url.Parse(path.Join(s.proxyPath, token, escapePathForURL(cumulative)) + "/")
 		crumbs = append(crumbs, breadcrumb{
 			Name: part,
-			URL:  resolveURL(r, relativeURL, proxyPort),
+			URL:  s.resolveURL(r, relativeURL),
 		})
 	}
 
@@ -584,13 +580,47 @@ func buildBreadcrumbs(r *http.Request, token, subpath, proxyPath, proxyPort stri
 // it lists files and subdirectories at the given path within a directory.
 // Browsers receive an HTML page, other clients (curl) receive a plain URL list.
 // Supports pagination via ?page=N&limit=N query parameters.
+func paginateFileEntries(files []fileEntry, page, limit int) (paginated []fileEntry, totalPages, adjustedPage int) {
+	totalFiles := len(files)
+	totalPages = 1
+	adjustedPage = page
+
+	if limit <= 0 {
+		return files, totalPages, page
+	}
+
+	if totalFiles > 0 {
+		totalPages = (totalFiles + limit - 1) / limit
+	}
+	if adjustedPage > totalPages {
+		adjustedPage = totalPages
+	}
+	if adjustedPage < 1 {
+		adjustedPage = 1
+	}
+
+	if totalFiles == 0 {
+		return nil, totalPages, adjustedPage
+	}
+
+	start := (adjustedPage - 1) * limit
+	end := start + limit
+	if end > totalFiles {
+		end = totalFiles
+	}
+	if start < totalFiles {
+		paginated = files[start:end]
+	}
+	return paginated, totalPages, adjustedPage
+}
+
 func (s *Server) listDirectoryHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	dirToken := vars["token"]
 	subpath := vars["subpath"]
 
-	if len(dirToken) > maxTokenLength {
-		s.respondError(w, http.StatusBadRequest, "token too long", "")
+	if err := validateToken(dirToken); err != nil {
+		s.respondError(w, http.StatusBadRequest, err.Error(), "")
 		return
 	}
 
@@ -612,10 +642,12 @@ func (s *Server) listDirectoryHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	subdirs, dirFiles := filterAndSplitDirEntries(idx.Files, subpath)
+	totalFiles := len(dirFiles)
+	paginatedFiles, totalPages, adjustedPage := paginateFileEntries(dirFiles, page, limit)
 
 	var entries []dirFileEntry
 	var staleFiles []string
-	for _, f := range dirFiles {
+	for _, f := range paginatedFiles {
 		if _, err := s.storage.Head(r.Context(), dirToken, f.Name); err != nil {
 			if s.storage.IsNotExist(err) {
 				staleFiles = append(staleFiles, f.Name)
@@ -625,7 +657,7 @@ func (s *Server) listDirectoryHandler(w http.ResponseWriter, r *http.Request) {
 		relativeURL, _ := url.Parse(path.Join(s.proxyPath, dirToken, escapePathForURL(f.Name)))
 		entries = append(entries, dirFileEntry{
 			Name: path.Base(f.Name),
-			URL:  resolveURL(r, relativeURL, s.proxyPort),
+			URL:  s.resolveURL(r, relativeURL),
 		})
 	}
 
@@ -637,32 +669,27 @@ func (s *Server) listDirectoryHandler(w http.ResponseWriter, r *http.Request) {
 	for i := range subdirs {
 		name := strings.TrimSuffix(subdirs[i].Name, "/")
 		relativeURL, _ := url.Parse(path.Join(subdirBase, escapePathForURL(name)) + "/")
-		subdirs[i].URL = resolveURL(r, relativeURL, s.proxyPort)
+		subdirs[i].URL = s.resolveURL(r, relativeURL)
 	}
 
-	crumbs := buildBreadcrumbs(r, dirToken, subpath, s.proxyPath, s.proxyPort)
+	crumbs := s.buildBreadcrumbs(r, dirToken, subpath)
 	rootRelative, _ := url.Parse(path.Join(s.proxyPath, dirToken) + "/")
-	rootURL := resolveURL(r, rootRelative, s.proxyPort)
+	rootURL := s.resolveURL(r, rootRelative)
 
-	// Generate scoped archive URLs (include subpath if viewing a subdirectory)
 	zipPath := path.Join(s.proxyPath, "zip", dirToken)
 	if subpath != "" {
 		zipPath = path.Join(zipPath, escapePathForURL(subpath))
 	}
 	zipRelative, _ := url.Parse(zipPath + "/")
-	zipURL := resolveURL(r, zipRelative, s.proxyPort)
+	zipURL := s.resolveURL(r, zipRelative)
 
 	tarGzPath := path.Join(s.proxyPath, "tar.gz", dirToken)
 	if subpath != "" {
 		tarGzPath = path.Join(tarGzPath, escapePathForURL(subpath))
 	}
 	tarGzRelative, _ := url.Parse(tarGzPath + "/")
-	tarGzURL := resolveURL(r, tarGzRelative, s.proxyPort)
+	tarGzURL := s.resolveURL(r, tarGzRelative)
 
-	totalFiles := len(entries)
-	entries, totalPages, page := applyPagination(entries, page, limit)
-
-	// Check if there are files in the current scope (subpath or root)
 	scopedFiles := filterFilesBySubpath(idx.Files, subpath)
 
 	data := directoryListData{
@@ -675,11 +702,11 @@ func (s *Server) listDirectoryHandler(w http.ResponseWriter, r *http.Request) {
 		Breadcrumbs:     crumbs,
 		Subdirs:         subdirs,
 		Files:           entries,
-		Page:            page,
+		Page:            adjustedPage,
 		Limit:           limit,
 		TotalFiles:      totalFiles,
 		TotalPages:      totalPages,
-		WebAddress:      resolveWebAddress(r, s.proxyPath, s.proxyPort),
+		WebAddress:      s.resolveWebAddress(r),
 	}
 
 	w.Header().Set("Vary", "Accept")
@@ -727,9 +754,6 @@ func dirIndexContainsFile(idx dirIndex, filename string) bool {
 func (s *Server) cleanupOrphanedUpload(ctx context.Context, dirToken, filename string) {
 	if delErr := s.storage.Delete(ctx, dirToken, filename); delErr != nil && !s.storage.IsNotExist(delErr) {
 		s.logger.Printf("directory: failed to clean up orphaned file %s/%s: %v", dirToken, filename, delErr)
-	}
-	if delErr := s.storage.Delete(ctx, dirToken, fmt.Sprintf("%s.metadata", filename)); delErr != nil && !s.storage.IsNotExist(delErr) {
-		s.logger.Printf("directory: failed to clean up orphaned metadata %s/%s.metadata: %v", dirToken, filename, delErr)
 	}
 }
 
@@ -780,8 +804,8 @@ func (s *Server) deleteDirHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	dirToken := vars["token"]
 
-	if len(dirToken) > maxTokenLength {
-		s.respondError(w, http.StatusBadRequest, "token too long", "")
+	if err := validateToken(dirToken); err != nil {
+		s.respondError(w, http.StatusBadRequest, err.Error(), "")
 		return
 	}
 
@@ -807,9 +831,6 @@ func (s *Server) deleteDirHandler(w http.ResponseWriter, r *http.Request) {
 		if err := s.storage.Delete(r.Context(), dirToken, entry.Name); err != nil && !s.storage.IsNotExist(err) {
 			s.logger.Printf("directory: failed to delete %s/%s: %v", dirToken, entry.Name, err)
 			continue
-		}
-		if err := s.storage.Delete(r.Context(), dirToken, fmt.Sprintf("%s.metadata", entry.Name)); err != nil && !s.storage.IsNotExist(err) {
-			s.logger.Printf("directory: failed to delete metadata for %s/%s: %v", dirToken, entry.Name, err)
 		}
 		deletedCount++
 	}
@@ -851,8 +872,8 @@ func filterFilesBySubpath(files []fileEntry, subpath string) []fileEntry {
 // validateDirForArchive checks if a directory is valid for archive creation.
 // Returns the directory index and sanitized subpath if valid, or writes an error response and returns nil.
 func (s *Server) validateDirForArchive(w http.ResponseWriter, r *http.Request, dirToken, subpath string) (*dirIndex, string) {
-	if len(dirToken) > maxTokenLength {
-		s.respondError(w, http.StatusBadRequest, "token too long", "")
+	if err := validateToken(dirToken); err != nil {
+		s.respondError(w, http.StatusBadRequest, err.Error(), "")
 		return nil, ""
 	}
 
