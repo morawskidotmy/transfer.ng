@@ -7,6 +7,7 @@ IP filter and HTTP auth bypass via unauthenticated X-Forwarded-For header spoofi
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/morawskidotmy/transfer.ng)](https://goreportcard.com/report/github.com/morawskidotmy/transfer.ng)
 [![Build Status](https://github.com/morawskidotmy/transfer.ng/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/morawskidotmy/transfer.ng/actions/workflows/test.yml?query=branch%3Amain)
+[![Diff](https://github.com/morawskidotmy/transfer.ng/actions/workflows/diff.yml/badge.svg?branch=main)](https://github.com/morawskidotmy/transfer.ng/actions/workflows/diff.yml)
 
 Easy and fast file sharing from the command-line. Self-hostable with support for S3, Google Drive, Storj, and local storage.
 

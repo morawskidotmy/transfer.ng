@@ -2,9 +2,12 @@ package server
 
 import (
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,7 +27,7 @@ type suiteRedirectWithForceHTTPS struct {
 }
 
 func (s *suiteRedirectWithForceHTTPS) SetUpTest(c *C) {
-	srvr, err := New(ForceHTTPS())
+	srvr, err := New(ForceHTTPS(), TrustedProxies("192.0.2.0/24"))
 	c.Assert(err, IsNil)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -132,6 +135,10 @@ func (s *suiteSanitize) TestSanitizePathBasic(c *C) {
 		{"...test", "test"},
 		{"", "_"},
 		{"file:name.txt", "filename.txt"},
+		{"file.metadata", "file_metadata"},
+		{"file.METADATA", "file_metadata"},
+		{"file.Metadata", "file_metadata"},
+		{"dir/file.metadata", "dir/file_metadata"},
 	}
 
 	for _, test := range tests {
@@ -178,20 +185,24 @@ func (s *suiteValidation) TestValidateTokenAndFilename(c *C) {
 	}{
 		{"abc123", "file.txt", false},
 		{"token", "name", false},
-		{string(make([]byte, 200)), "file.txt", false},
-		{string(make([]byte, 201)), "file.txt", true},
+		{strings.Repeat("a", 200), "file.txt", false},
+		{strings.Repeat("a", 201), "file.txt", true},
 		{"token", string(make([]byte, 255)), false},
 		{"token", string(make([]byte, 1024)), false},
 		{"token", string(make([]byte, 1025)), true},
-		{string(make([]byte, 201)), string(make([]byte, 1025)), true},
+		{strings.Repeat("a", 201), string(make([]byte, 1025)), true},
+		{"token-with-dash", "file.txt", true},
+		{"token_with_under", "file.txt", true},
+		{"token.with.dot", "file.txt", true},
+		{"", "file.txt", true},
 	}
 
 	for _, test := range tests {
 		err := validateTokenAndFilename(test.token, test.filename)
 		if test.wantErr {
-			c.Assert(err, NotNil, Commentf("token len=%d, filename len=%d", len(test.token), len(test.filename)))
+			c.Assert(err, NotNil, Commentf("token=%q, filename len=%d", test.token, len(test.filename)))
 		} else {
-			c.Assert(err, IsNil, Commentf("token len=%d, filename len=%d", len(test.token), len(test.filename)))
+			c.Assert(err, IsNil, Commentf("token=%q, filename len=%d", test.token, len(test.filename)))
 		}
 	}
 }
@@ -273,35 +284,60 @@ func (s *suiteHandlers) TestResolveKey(c *C) {
 }
 
 func (s *suiteHandlers) TestResolveURL(c *C) {
+	srvr, err := New()
+	c.Assert(err, IsNil)
+
 	req := httptest.NewRequest("GET", "http://example.com/some/path", nil)
 	u, _ := url.Parse("token/file.txt")
-	result := resolveURL(req, u, "")
+	result := srvr.resolveURL(req, u)
 	c.Assert(result, Equals, "http://example.com/token/file.txt")
 }
 
+func (s *suiteHandlers) TestResolveURLWithTrustedProxy(c *C) {
+	srvr, err := New(TrustedProxies("192.168.1.0/24"))
+	c.Assert(err, IsNil)
+
+	req := httptest.NewRequest("GET", "http://example.com/some/path", nil)
+	req.RemoteAddr = "192.168.1.100:12345"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	u, _ := url.Parse("token/file.txt")
+	result := srvr.resolveURL(req, u)
+	c.Assert(result, Equals, "https://example.com/token/file.txt")
+}
+
 func (s *suiteHandlers) TestResolveWebAddress(c *C) {
+	srvr, err := New()
+	c.Assert(err, IsNil)
+
 	req := httptest.NewRequest("GET", "http://example.com/", nil)
 
-	result := resolveWebAddress(req, "", "")
+	result := srvr.resolveWebAddress(req)
 	c.Assert(result, Equals, "http://example.com/")
 
-	result = resolveWebAddress(req, "/prefix", "")
-	c.Assert(result, Equals, "http://example.com/prefix")
+	srvr2, err := New(ProxyPath("/prefix"))
+	c.Assert(err, IsNil)
+	result = srvr2.resolveWebAddress(req)
+	c.Assert(result, Equals, "http://example.com/prefix/")
 }
 
 func (s *suiteHandlers) TestGetURL(c *C) {
+	srvr, err := New()
+	c.Assert(err, IsNil)
+
 	req := httptest.NewRequest("GET", "http://example.com:8080/path", nil)
-	u := getURL(req, "")
+	u := srvr.getURL(req)
 	c.Assert(u.Scheme, Equals, "http")
 	c.Assert(u.Host, Equals, "example.com:8080")
 
 	req2 := httptest.NewRequest("GET", "https://example.com/path", nil)
-	u2 := getURL(req2, "")
+	u2 := srvr.getURL(req2)
 	c.Assert(u2.Scheme, Equals, "https")
 	c.Assert(u2.Host, Equals, "example.com")
 
+	srvr3, err := New(ProxyPort("9090"))
+	c.Assert(err, IsNil)
 	req3 := httptest.NewRequest("GET", "http://example.com/path", nil)
-	u3 := getURL(req3, "9090")
+	u3 := srvr3.getURL(req3)
 	c.Assert(u3.Host, Equals, "example.com:9090")
 }
 
@@ -426,7 +462,7 @@ func (s *suiteHandlers) TestIPFilterHandlerNil(c *C) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := ipFilterHandler(inner, nil)
+	handler := ipFilterHandler(inner, nil, nil)
 
 	req := httptest.NewRequest("GET", "/", nil)
 	w := httptest.NewRecorder()
@@ -463,4 +499,217 @@ func (s *suiteHandlers) TestRespondError(c *C) {
 	srvr.respondError(w, http.StatusBadRequest, "bad request", "")
 	c.Assert(w.Code, Equals, http.StatusBadRequest)
 	c.Assert(w.Body.String(), Equals, "bad request\n")
+}
+
+func (s *suiteHandlers) TestIsAuthorizedHtpasswdOnlyBypass(c *C) {
+	srvr, err := New()
+	c.Assert(err, IsNil)
+
+	srvr.authUser = ""
+	srvr.authPass = ""
+	srvr.authHtpasswd = "/dev/null"
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Authorization", "Basic Og==")
+
+	c.Assert(srvr.isAuthorized("", "", true, req), Equals, false)
+}
+
+func (s *suiteHandlers) TestIsAuthorizedStaticCredentials(c *C) {
+	srvr, err := New()
+	c.Assert(err, IsNil)
+
+	srvr.authUser = "admin"
+	srvr.authPass = "secret"
+
+	req := httptest.NewRequest("GET", "/", nil)
+	c.Assert(srvr.isAuthorized("admin", "secret", true, req), Equals, true)
+	c.Assert(srvr.isAuthorized("admin", "wrong", true, req), Equals, false)
+	c.Assert(srvr.isAuthorized("", "", true, req), Equals, false)
+}
+
+func (s *suiteHandlers) TestRequireAuthHandlerNoAuth(c *C) {
+	srvr, err := New()
+	c.Assert(err, IsNil)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := srvr.requireAuthHandler(inner)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	c.Assert(w.Code, Equals, http.StatusServiceUnavailable)
+	c.Assert(w.Body.String(), Equals, "Authentication required for this endpoint\n")
+}
+
+func (s *suiteHandlers) TestRequireAuthHandlerWithAuth(c *C) {
+	srvr, err := New()
+	c.Assert(err, IsNil)
+
+	srvr.authUser = "admin"
+	srvr.authPass = "secret"
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := srvr.requireAuthHandler(inner)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.SetBasicAuth("admin", "secret")
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	c.Assert(w.Code, Equals, http.StatusOK)
+}
+
+func (s *suiteHandlers) TestRequireAuthHandlerInvalidAuth(c *C) {
+	srvr, err := New()
+	c.Assert(err, IsNil)
+
+	srvr.authUser = "admin"
+	srvr.authPass = "secret"
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := srvr.requireAuthHandler(inner)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.SetBasicAuth("admin", "wrong")
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	c.Assert(w.Code, Equals, http.StatusUnauthorized)
+}
+
+func (s *suiteHandlers) TestRequireAuthHandlerIPWhitelistOnly(c *C) {
+	srvr, err := New()
+	c.Assert(err, IsNil)
+
+	srvr.authIPFilterOptions = &IPFilterOptions{AllowedIPs: []string{"192.168.1.0/24"}}
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := srvr.requireAuthHandler(inner)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "192.168.1.100:12345"
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	c.Assert(w.Code, Equals, http.StatusOK)
+}
+
+func (s *suiteHandlers) TestTrustedProxySpoofedHeaders(c *C) {
+	srvr, err := New(TrustedProxies("192.168.1.0/24"))
+	c.Assert(err, IsNil)
+
+	// Request from untrusted IP with spoofed X-Forwarded-For
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "10.0.0.1:12345"
+	req.Header.Set("X-Forwarded-For", "1.2.3.4")
+
+	ip := srvr.remoteIP(req)
+	c.Assert(ip, Equals, "10.0.0.1")
+}
+
+func (s *suiteHandlers) TestTrustedProxyValidForwardedFor(c *C) {
+	srvr, err := New(TrustedProxies("192.168.1.0/24"))
+	c.Assert(err, IsNil)
+
+	// Request from trusted IP with X-Forwarded-For
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "192.168.1.100:12345"
+	req.Header.Set("X-Forwarded-For", "1.2.3.4, 5.6.7.8")
+
+	ip := srvr.remoteIP(req)
+	c.Assert(ip, Equals, "1.2.3.4")
+}
+
+func (s *suiteHandlers) TestTrustedProxySpoofedProto(c *C) {
+	srvr, err := New(TrustedProxies("192.168.1.0/24"))
+	c.Assert(err, IsNil)
+
+	// Request from untrusted IP with spoofed X-Forwarded-Proto
+	req := httptest.NewRequest("GET", "http://example.com/", nil)
+	req.RemoteAddr = "10.0.0.1:12345"
+	req.Header.Set("X-Forwarded-Proto", "https")
+
+	u := srvr.getURL(req)
+	c.Assert(u.Scheme, Equals, "http")
+}
+
+func (s *suiteHandlers) TestTrustedProxyValidProto(c *C) {
+	srvr, err := New(TrustedProxies("192.168.1.0/24"))
+	c.Assert(err, IsNil)
+
+	// Request from trusted IP with X-Forwarded-Proto
+	req := httptest.NewRequest("GET", "http://example.com/", nil)
+	req.RemoteAddr = "192.168.1.100:12345"
+	req.Header.Set("X-Forwarded-Proto", "https")
+
+	u := srvr.getURL(req)
+	c.Assert(u.Scheme, Equals, "https")
+}
+
+func (s *suiteHandlers) TestValidateUploadSizeDefault(c *C) {
+	srvr, err := New(Logger(log.New(io.Discard, "", 0)))
+	c.Assert(err, IsNil)
+
+	w := httptest.NewRecorder()
+	c.Assert(srvr.validateUploadSize(w, 5*1024*1024*1024), Equals, true)
+	c.Assert(srvr.validateUploadSize(w, 15*1024*1024*1024), Equals, false)
+	c.Assert(w.Code, Equals, http.StatusRequestEntityTooLarge)
+}
+
+func (s *suiteHandlers) TestValidateUploadSizeConfigured(c *C) {
+	srvr, err := New(MaxUploadSize(100), Logger(log.New(io.Discard, "", 0)))
+	c.Assert(err, IsNil)
+
+	w := httptest.NewRecorder()
+	c.Assert(srvr.validateUploadSize(w, 50*1024), Equals, true)
+	c.Assert(srvr.validateUploadSize(w, 150*1024), Equals, false)
+	c.Assert(w.Code, Equals, http.StatusRequestEntityTooLarge)
+}
+
+func (s *suiteHandlers) TestAllowedHostsEmpty(c *C) {
+	srvr, err := New()
+	c.Assert(err, IsNil)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "example.com:8080"
+	c.Assert(srvr.validateHost(req), Equals, "example.com:8080")
+}
+
+func (s *suiteHandlers) TestAllowedHostsConfigured(c *C) {
+	srvr, err := New(AllowedHosts("example.com,localhost:8080"))
+	c.Assert(err, IsNil)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "example.com"
+	c.Assert(srvr.validateHost(req), Equals, "example.com")
+
+	req.Host = "localhost:8080"
+	c.Assert(srvr.validateHost(req), Equals, "localhost:8080")
+
+	req.Host = "evil.com"
+	c.Assert(srvr.validateHost(req), Equals, "")
+}
+
+func (s *suiteHandlers) TestGetURLWithAllowedHosts(c *C) {
+	srvr, err := New(AllowedHosts("example.com"))
+	c.Assert(err, IsNil)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "example.com"
+	u := srvr.getURL(req)
+	c.Assert(u.Host, Equals, "example.com")
+
+	req.Host = "evil.com"
+	u = srvr.getURL(req)
+	c.Assert(u.Host, Equals, "localhost")
 }

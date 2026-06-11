@@ -1,0 +1,71 @@
+name: diff
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+jobs:
+  diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ng
+      - uses: actions/checkout@v4
+        with:
+          repository: dutchcoders/transfer.sh
+          path: sh
+      - name: Compute diff percentage
+        id: compute
+        run: |
+          python3 << 'PYEOF'
+          import os, difflib
+
+          ng_root = "ng"
+          sh_root = "sh"
+
+          ng_files = {}
+          for root, dirs, files in os.walk(ng_root):
+              for f in files:
+                  if f.endswith(".go") and "/.git/" not in root and "/vendor/" not in root:
+                      rel = os.path.relpath(os.path.join(root, f), ng_root)
+                      with open(os.path.join(root, f)) as fh:
+                          ng_files[rel] = fh.readlines()
+
+          sh_files = {}
+          for root, dirs, files in os.walk(sh_root):
+              for f in files:
+                  if f.endswith(".go") and "/.git/" not in root and "/vendor/" not in root:
+                      rel = os.path.relpath(os.path.join(root, f), sh_root)
+                      with open(os.path.join(root, f)) as fh:
+                          sh_files[rel] = fh.readlines()
+
+          common = set(ng_files.keys()) & set(sh_files.keys())
+          only_ng = set(ng_files.keys()) - set(sh_files.keys())
+          only_sh = set(sh_files.keys()) - set(ng_files.keys())
+
+          ng_total = sum(len(v) for v in ng_files.values())
+          changed = 0
+
+          for f in common:
+              matcher = difflib.SequenceMatcher(None, sh_files[f], ng_files[f])
+              for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+                  if tag != "equal":
+                      changed += (j2 - j1)
+
+          for f in only_ng:
+              changed += len(ng_files[f])
+
+          pct = round(100 * changed / ng_total) if ng_total else 0
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as fh:
+              fh.write(f"### Diff from transfer.sh\n\n")
+              fh.write(f"- **Total Go lines (transfer.ng):** {ng_total}\n")
+              fh.write(f"- **Lines different:** {changed}\n")
+              fh.write(f"- **Percentage:** {pct}%\n")
+              fh.write(f"- **Common files:** {len(common)}\n")
+              fh.write(f"- **New files:** {len(only_ng)}\n")
+              fh.write(f"- **Removed files:** {len(only_sh)}\n")
+
+          print(f"pct={pct}")
+          PYEOF

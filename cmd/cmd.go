@@ -347,6 +347,18 @@ var globalFlags = []cli.Flag{
 		Value:   "",
 		EnvVars: []string{"CORS_DOMAINS"},
 	},
+	&cli.StringFlag{
+		Name:    "trusted-proxies",
+		Usage:   "comma separated list of CIDRs of trusted reverse proxies whose X-Forwarded-For/X-Forwarded-Proto headers will be honored",
+		Value:   "",
+		EnvVars: []string{"TRUSTED_PROXIES"},
+	},
+	&cli.StringFlag{
+		Name:    "allowed-hosts",
+		Usage:   "comma separated list of allowed Host header values; when empty, all hosts are accepted",
+		Value:   "",
+		EnvVars: []string{"ALLOWED_HOSTS"},
+	},
 	&cli.BoolFlag{
 		Name:    "insecure",
 		Usage:   "disable IP filtering and CORS checks (security managed by reverse proxy/firewall)",
@@ -467,6 +479,8 @@ func New() *Cmd {
 func addBasicOptions(c *cli.Context, options *[]server.OptionFn, logger *log.Logger) {
 	addStringOption(c, options, "listener", server.Listener)
 	addStringOption(c, options, "cors-domains", server.CORSDomains)
+	addStringOption(c, options, "trusted-proxies", server.TrustedProxies)
+	addStringOption(c, options, "allowed-hosts", server.AllowedHosts)
 	addStringOption(c, options, "profile-listener", server.ProfileListener)
 	addStringOption(c, options, "web-path", server.WebPath)
 	addStringOption(c, options, "proxy-path", server.ProxyPath)

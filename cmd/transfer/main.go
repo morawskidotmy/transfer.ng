@@ -29,13 +29,12 @@ var (
 const (
 	defaultHost       = "https://transfer.morawski.my"
 	defaultWorkers    = 4
+	maxWorkers        = 8
+	minWorkers        = 1
 	defaultMaxRetries = 0
 	defaultMinDelay   = 500
 	defaultMaxDelay   = 30 * time.Second
 	barWidth          = 30
-
-	uploadTimeoutBase    = 2 * time.Minute
-	uploadTimeoutPerByte = 10 * time.Second / (1024 * 1024) // 10s per MB
 
 	githubRepo    = "morawskidotmy/transfer.ng"
 	githubRepoURL = "https://github.com/" + githubRepo + ".git"
@@ -43,16 +42,15 @@ const (
 )
 
 type Config struct {
-	Host          string
-	Workers       int
-	MaxRetries    int
-	Insecure      bool
-	MinDelay      time.Duration
-	UploadTimeout time.Duration
-	NoUpdateCheck bool
-	ForceUpdate   bool
-	ShowVersion   bool
-	ShowHelp      bool
+	Host            string
+	Workers         int
+	MaxRetries      int
+	Insecure        bool
+	MinDelay        time.Duration
+	WorkersExplicit bool
+	ForceUpdate     bool
+	ShowVersion     bool
+	ShowHelp        bool
 }
 
 type UploadResult struct {
@@ -67,21 +65,82 @@ type DirResponse struct {
 	UploadToken  string
 }
 
+type concurrencyLimiter struct {
+	mu      sync.Mutex
+	current int
+	max     int
+	min     int
+	sem     chan struct{}
+}
+
+func newConcurrencyLimiter(initial, max, min int) *concurrencyLimiter {
+	if initial < min {
+		initial = min
+	}
+	if initial > max {
+		initial = max
+	}
+	return &concurrencyLimiter{
+		current: initial,
+		max:     max,
+		min:     min,
+		sem:     make(chan struct{}, max),
+	}
+}
+
+func (c *concurrencyLimiter) Acquire() {
+	c.sem <- struct{}{}
+}
+
+func (c *concurrencyLimiter) Release() {
+	<-c.sem
+}
+
+func (c *concurrencyLimiter) Current() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.current
+}
+
+func (c *concurrencyLimiter) Reduce() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.current > c.min {
+		c.current /= 2
+		if c.current < c.min {
+			c.current = c.min
+		}
+	}
+}
+
+func (c *concurrencyLimiter) Increase() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.current < c.max {
+		c.current++
+	}
+}
+
+func (c *concurrencyLimiter) ShouldAllow() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.sem) < c.current
+}
+
 type globalThrottle struct {
-	mu            sync.Mutex
-	lastTime      time.Time
-	minDelay      time.Duration
-	maxDelay      time.Duration
-	delay         time.Duration
-	pauseUntil    time.Time
-	serverPause   time.Time // Server-imposed pause from 429 Retry-After
+	mu          sync.Mutex
+	lastTime    time.Time
+	minDelay    time.Duration
+	maxDelay    time.Duration
+	delay       time.Duration
+	pauseUntil  time.Time
+	serverPause time.Time
 }
 
 func newGlobalThrottle(minDelay time.Duration) *globalThrottle {
 	if minDelay <= 0 {
 		minDelay = time.Duration(defaultMinDelay) * time.Millisecond
 	}
-
 	return &globalThrottle{
 		minDelay: minDelay,
 		maxDelay: defaultMaxDelay,
@@ -94,7 +153,6 @@ func (t *globalThrottle) Wait() {
 		t.mu.Lock()
 		now := time.Now()
 
-		// Respect server-imposed pause (from 429 Retry-After)
 		if !t.serverPause.IsZero() {
 			if now.Before(t.serverPause) {
 				waitUntil := t.serverPause
@@ -105,7 +163,6 @@ func (t *globalThrottle) Wait() {
 			t.serverPause = time.Time{}
 		}
 
-		// Respect adaptive pause (from failures)
 		if !t.pauseUntil.IsZero() {
 			if now.Before(t.pauseUntil) {
 				waitUntil := t.pauseUntil
@@ -144,14 +201,8 @@ func (t *globalThrottle) RecordFailure(retryAfter time.Duration) time.Duration {
 	if current <= 0 {
 		current = t.minDelay
 	}
-	if current <= 0 {
-		current = time.Duration(defaultMinDelay) * time.Millisecond
-	}
 
 	nextDelay := current * 2
-	if nextDelay < t.minDelay {
-		nextDelay = t.minDelay
-	}
 	if nextDelay > t.maxDelay {
 		nextDelay = t.maxDelay
 	}
@@ -170,8 +221,6 @@ func (t *globalThrottle) RecordFailure(retryAfter time.Duration) time.Duration {
 
 	t.delay = nextDelay
 
-	// Server-imposed pause (from 429 Retry-After) goes to serverPause
-	// so it won't be cleared by success
 	if retryAfter > 0 {
 		t.serverPause = time.Now().Add(pauseFor)
 	} else {
@@ -182,6 +231,7 @@ func (t *globalThrottle) RecordFailure(retryAfter time.Duration) time.Duration {
 	if retryAfter <= 0 {
 		jitterRange := waitTime / 2
 		if jitterRange > 0 {
+			// #nosec G404 -- math/rand used for retry jitter, not cryptographic
 			waitTime += time.Duration(rand.Int63n(int64(jitterRange)))
 		}
 	}
@@ -193,11 +243,7 @@ func (t *globalThrottle) RecordSuccess() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	// Only clear adaptive pause, not server-imposed pause
 	t.pauseUntil = time.Time{}
-	if t.delay <= 0 {
-		t.delay = t.minDelay
-	}
 	if t.delay > t.minDelay {
 		nextDelay := t.delay - t.delay/4
 		if nextDelay < t.minDelay {
@@ -205,26 +251,25 @@ func (t *globalThrottle) RecordSuccess() {
 		}
 		t.delay = nextDelay
 	}
-	if t.delay < t.minDelay {
-		t.delay = t.minDelay
-	}
 }
 
 type progressDisplay struct {
-	mu            sync.Mutex
-	dirURL        string
-	fileName      string
-	bytes         int64
-	total         int64
-	totalFiles    int64
+	mu             sync.Mutex
+	dirURL         string
+	fileName       string
+	bytes          int64
+	total          int64
+	totalFiles     int64
 	completedFiles int64
-	isTTY         bool
+	workers        int
+	isTTY          bool
 }
 
-func newProgressDisplay(dirURL string, totalFiles int64) *progressDisplay {
+func newProgressDisplay(dirURL string, totalFiles int64, workers int) *progressDisplay {
 	return &progressDisplay{
 		dirURL:     dirURL,
 		totalFiles: totalFiles,
+		workers:    workers,
 		isTTY:      term.IsTerminal(int(os.Stdout.Fd())),
 	}
 }
@@ -245,32 +290,33 @@ func (p *progressDisplay) FileCompleted() {
 	p.render()
 }
 
+func (p *progressDisplay) SetWorkers(n int) {
+	p.mu.Lock()
+	p.workers = n
+	p.mu.Unlock()
+}
+
 func (p *progressDisplay) render() {
 	if !p.isTTY {
 		return
 	}
 
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	name := p.fileName
 	current := p.bytes
 	total := p.total
 	dirURL := p.dirURL
 	completed := p.completedFiles
 	totalF := p.totalFiles
+	workers := p.workers
+	p.mu.Unlock()
 
 	var filePct float64
 	if total > 0 {
 		filePct = float64(current) / float64(total) * 100
 	}
 
-	var overallPct float64
-	if totalF > 0 {
-		overallPct = float64(completed) / float64(totalF) * 100
-	}
-
-	filled := int(overallPct / 100 * float64(barWidth))
+	filled := int(filePct / 100 * float64(barWidth))
 	if filled > barWidth {
 		filled = barWidth
 	}
@@ -283,23 +329,21 @@ func (p *progressDisplay) render() {
 
 	var sb strings.Builder
 	sb.WriteString("\033[2K\r")
-	fmt.Fprintf(&sb, "[%s] %3.0f%% (%d/%d files)\n", bar, overallPct, completed, totalF)
-	sb.WriteString("\033[2K\r")
 	sb.WriteString(name)
 	sb.WriteString("\n")
 	sb.WriteString("\033[2K\r")
-	fmt.Fprintf(&sb, "  %3.0f%% %s\n", filePct, sizeStr)
+	fmt.Fprintf(&sb, "[%s] %3.0f%% %s | %d/%d files | w%d\n", bar, filePct, sizeStr, completed, totalF, workers)
 	sb.WriteString("\033[2K\r")
 	sb.WriteString(dirURL)
 	sb.WriteString("\n")
-	sb.WriteString("\033[4A\r")
+	sb.WriteString("\033[3A\r")
 
 	fmt.Print(sb.String())
 }
 
 func (p *progressDisplay) Finish() {
 	if p.isTTY {
-		fmt.Print("\033[4B\n")
+		fmt.Print("\033[3B\n")
 	}
 }
 
@@ -351,12 +395,6 @@ func main() {
 		os.Exit(0)
 	}
 
-	if !config.NoUpdateCheck {
-		go func() {
-			_ = selfUpdate(config, false)
-		}()
-	}
-
 	args := os.Args[1:]
 
 	files, basePaths, err := collectFiles(args)
@@ -376,10 +414,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	display := newProgressDisplay(dirResp.DirectoryURL, int64(len(files)))
 	throttle := newGlobalThrottle(config.MinDelay)
 
-	results := uploadFiles(config, dirResp, files, basePaths, throttle, display)
+	var limiter *concurrencyLimiter
+	if config.WorkersExplicit {
+		limiter = newConcurrencyLimiter(config.Workers, config.Workers, config.Workers)
+	} else {
+		limiter = newConcurrencyLimiter(defaultWorkers, maxWorkers, minWorkers)
+	}
+
+	display := newProgressDisplay(dirResp.DirectoryURL, int64(len(files)), limiter.Current())
+
+	results := uploadFiles(config, dirResp, files, basePaths, throttle, display, limiter)
 
 	display.Finish()
 
@@ -394,6 +440,10 @@ func loadConfig() Config {
 		MinDelay:   time.Duration(getEnvInt("TRANSFER_MIN_DELAY", defaultMinDelay)) * time.Millisecond,
 	}
 
+	if os.Getenv("TRANSFER_WORKERS") != "" {
+		config.WorkersExplicit = true
+	}
+
 	args := []string{}
 	for i := 1; i < len(os.Args); i++ {
 		arg := os.Args[i]
@@ -403,6 +453,7 @@ func loadConfig() Config {
 			var workers int
 			if _, err := fmt.Sscanf(strings.TrimPrefix(arg, "--workers="), "%d", &workers); err == nil {
 				config.Workers = workers
+				config.WorkersExplicit = true
 			}
 		} else if strings.HasPrefix(arg, "--delay=") {
 			var delay int
@@ -413,8 +464,6 @@ func loadConfig() Config {
 			config.Insecure = true
 		} else if arg == "--update" {
 			config.ForceUpdate = true
-		} else if arg == "--no-update-check" {
-			config.NoUpdateCheck = true
 		} else if arg == "--version" || arg == "-v" {
 			config.ShowVersion = true
 		} else if arg == "--help" || arg == "-h" {
@@ -523,43 +572,53 @@ func createDirectory(config Config) (*DirResponse, error) {
 	}, nil
 }
 
-func uploadFiles(config Config, dirResp *DirResponse, files []string, basePaths []string, throttle *globalThrottle, display *progressDisplay) []UploadResult {
+func uploadFiles(config Config, dirResp *DirResponse, files []string, basePaths []string, throttle *globalThrottle, display *progressDisplay, limiter *concurrencyLimiter) []UploadResult {
 	results := make([]UploadResult, len(files))
 	var completed int64
-
-	work := make(chan int, len(files))
-	for i := range files {
-		work <- i
-	}
-	close(work)
+	var successStreak int64
 
 	var wg sync.WaitGroup
-	for i := 0; i < config.Workers; i++ {
+	for idx := range files {
+		for !limiter.ShouldAllow() {
+			time.Sleep(50 * time.Millisecond)
+		}
+
 		wg.Add(1)
-		go func() {
+		go func(fileIdx int) {
 			defer wg.Done()
-			for idx := range work {
-				file := files[idx]
-				basePath := basePaths[idx]
-			result := uploadFileWithRetry(config, dirResp, file, basePath, config.MaxRetries, throttle, display)
-			results[idx] = result
+
+			limiter.Acquire()
+			defer limiter.Release()
+
+			file := files[fileIdx]
+			basePath := basePaths[fileIdx]
+			result := uploadFileWithRetry(config, dirResp, file, basePath, config.MaxRetries, throttle, display, limiter)
+			results[fileIdx] = result
 
 			atomic.AddInt64(&completed, 1)
 			display.FileCompleted()
+			display.SetWorkers(limiter.Current())
 
 			if !result.Success {
 				display.ShowError(result.Path)
+				atomic.StoreInt64(&successStreak, 0)
 				time.Sleep(200 * time.Millisecond)
+			} else {
+				streak := atomic.AddInt64(&successStreak, 1)
+				if streak >= 10 && !config.WorkersExplicit {
+					limiter.Increase()
+					atomic.StoreInt64(&successStreak, 0)
+					display.SetWorkers(limiter.Current())
+				}
 			}
-			}
-		}()
+		}(idx)
 	}
 
 	wg.Wait()
 	return results
 }
 
-func uploadFileWithRetry(config Config, dirResp *DirResponse, filePath string, basePath string, maxRetries int, throttle *globalThrottle, display *progressDisplay) UploadResult {
+func uploadFileWithRetry(config Config, dirResp *DirResponse, filePath string, basePath string, maxRetries int, throttle *globalThrottle, display *progressDisplay, limiter *concurrencyLimiter) UploadResult {
 	var lastErr error
 	attempt := 0
 	for {
@@ -581,6 +640,9 @@ func uploadFileWithRetry(config Config, dirResp *DirResponse, filePath string, b
 		if result.Retryable {
 			if maxRetries > 0 && attempt >= maxRetries-1 {
 				break
+			}
+			if !config.WorkersExplicit {
+				limiter.Reduce()
 			}
 			waitTime := throttle.RecordFailure(result.RetryAfter)
 			time.Sleep(waitTime)
@@ -892,11 +954,24 @@ func buildAndReplace(commit string, verbose bool) error {
 	}
 
 	// #nosec G204 -- githubRepoURL is a constant, tmpDir is a temp directory we created
-	cloneCmd := exec.Command("git", "clone", "--depth", "1", githubRepoURL, tmpDir)
+	cloneCmd := exec.Command("git", "clone", githubRepoURL, tmpDir)
 	cloneCmd.Stdout = nil
 	cloneCmd.Stderr = nil
 	if err := cloneCmd.Run(); err != nil {
 		return fmt.Errorf("failed to clone repository: %w", err)
+	}
+
+	if verbose {
+		fmt.Printf("Verifying commit %s...\n", commit[:7])
+	}
+
+	// #nosec G204 -- commit is from GitHub API for our own repo, tmpDir is a temp directory we created
+	checkoutCmd := exec.Command("git", "checkout", commit)
+	checkoutCmd.Dir = tmpDir
+	checkoutCmd.Stdout = nil
+	checkoutCmd.Stderr = nil
+	if err := checkoutCmd.Run(); err != nil {
+		return fmt.Errorf("failed to checkout commit %s: %w", commit[:7], err)
 	}
 
 	if verbose {
@@ -976,17 +1051,16 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Options:")
 	fmt.Println("  --host=URL           Server URL (default: https://transfer.morawski.my)")
-	fmt.Println("  --workers=N          Number of parallel upload workers (default: 4)")
+	fmt.Println("  --workers=N          Number of parallel upload workers (default: auto)")
 	fmt.Println("  --delay=MS           Minimum delay between requests in ms (default: 500)")
 	fmt.Println("  --insecure           Disable TLS verification")
-	fmt.Println("  --update             Check for and install updates")
-	fmt.Println("  --no-update-check    Skip automatic update check")
+	fmt.Println("  --update             Update to the latest version and exit")
 	fmt.Println("  --version, -v        Show version")
 	fmt.Println("  --help, -h           Show this help message")
 	fmt.Println()
 	fmt.Println("Environment variables:")
 	fmt.Println("  TRANSFER_HOST          Server URL")
-	fmt.Println("  TRANSFER_WORKERS       Number of parallel workers")
+	fmt.Println("  TRANSFER_WORKERS       Number of parallel workers (disables auto)")
 	fmt.Println("  TRANSFER_MAX_RETRIES   Maximum retry attempts (default: 0 = unlimited)")
 	fmt.Println("  TRANSFER_MIN_DELAY     Minimum delay between requests in ms (default: 500)")
 	fmt.Println()
