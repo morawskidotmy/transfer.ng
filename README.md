@@ -7,7 +7,7 @@ IP filter and HTTP auth bypass via unauthenticated X-Forwarded-For header spoofi
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/morawskidotmy/transfer.ng)](https://goreportcard.com/report/github.com/morawskidotmy/transfer.ng)
 [![Build Status](https://github.com/morawskidotmy/transfer.ng/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/morawskidotmy/transfer.ng/actions/workflows/test.yml?query=branch%3Amain)
-[![Diff](https://github.com/morawskidotmy/transfer.ng/actions/workflows/diff.yml/badge.svg?branch=main)](https://github.com/morawskidotmy/transfer.ng/actions/workflows/diff.yml)
+[![Diff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/morawskidotmy/transfer.ng/main/badge.json)](COMPARISON.md)
 
 Easy and fast file sharing from the command-line. Self-hostable with support for S3, Google Drive, Storj, and local storage.
 
@@ -16,7 +16,7 @@ Easy and fast file sharing from the command-line. Self-hostable with support for
 >
 > Unlike the original transfer.sh, transfer.ng includes **gofile-style directories**. Every upload automatically gets its own directory, and you can group multiple files together, add files from different machines, list directory contents, and download entire directories as archives.
 >
-> See the [Directories](#directories) section for details.
+> See the [Directories](#directories) section for details, or the full [transfer.ng vs transfer.sh comparison](COMPARISON.md).
 
 ## Features
 

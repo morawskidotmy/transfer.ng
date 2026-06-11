@@ -11,6 +11,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: ng
+          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/checkout@v4
         with:
           repository: dutchcoders/transfer.sh
@@ -19,7 +20,7 @@ jobs:
         id: compute
         run: |
           python3 << 'PYEOF'
-          import os, difflib
+          import os, difflib, json
 
           ng_root = "ng"
           sh_root = "sh"
@@ -67,5 +68,27 @@ jobs:
               fh.write(f"- **New files:** {len(only_ng)}\n")
               fh.write(f"- **Removed files:** {len(only_sh)}\n")
 
-          print(f"pct={pct}")
+          badge_data = {
+              "schemaVersion": 1,
+              "label": "diff from transfer.sh",
+              "message": f"{pct}%",
+              "color": "blue"
+          }
+          with open("ng/badge.json", "w") as f:
+              json.dump(badge_data, f)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"pct={pct}\n")
           PYEOF
+      - name: Push badge JSON
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd ng
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
+          git add badge.json
+          git diff --cached --quiet || git commit -m "chore: update diff badge [skip ci]"
+          git push origin main
