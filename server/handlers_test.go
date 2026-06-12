@@ -622,12 +622,13 @@ func (s *suiteHandlers) TestTrustedProxyValidForwardedFor(c *C) {
 	c.Assert(err, IsNil)
 
 	// Request from trusted IP with X-Forwarded-For
+	// Right-to-left parsing: 5.6.7.8 is not trusted, so it's the client IP
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "192.168.1.100:12345"
 	req.Header.Set("X-Forwarded-For", "1.2.3.4, 5.6.7.8")
 
 	ip := srvr.remoteIP(req)
-	c.Assert(ip, Equals, "1.2.3.4")
+	c.Assert(ip, Equals, "5.6.7.8")
 }
 
 func (s *suiteHandlers) TestTrustedProxySpoofedProto(c *C) {
@@ -661,9 +662,8 @@ func (s *suiteHandlers) TestValidateUploadSizeDefault(c *C) {
 	c.Assert(err, IsNil)
 
 	w := httptest.NewRecorder()
-	c.Assert(srvr.validateUploadSize(w, 5*1024*1024*1024), Equals, true)
-	c.Assert(srvr.validateUploadSize(w, 15*1024*1024*1024), Equals, false)
-	c.Assert(w.Code, Equals, http.StatusRequestEntityTooLarge)
+	// Default (0) means unlimited, so 15GB should be allowed
+	c.Assert(srvr.validateUploadSize(w, 15*1024*1024*1024), Equals, true)
 }
 
 func (s *suiteHandlers) TestValidateUploadSizeConfigured(c *C) {

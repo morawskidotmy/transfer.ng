@@ -322,9 +322,12 @@ func (s *suiteDirectory) TestDeletionTokenRoundTrip(c *C) {
 
 	deleteURL := w.Header().Get("X-Url-Delete")
 	c.Assert(deleteURL, Not(Equals), "")
+	deletionToken := w.Header().Get("X-Deletion-Token")
+	c.Assert(deletionToken, Not(Equals), "")
 
 	deletePath := strings.TrimPrefix(deleteURL, "http://example.com")
 	req = httptest.NewRequest("DELETE", deletePath, nil)
+	req.Header.Set("X-Deletion-Token", deletionToken)
 	w = s.do(req)
 	c.Assert(w.Code, Equals, http.StatusOK)
 
@@ -337,9 +340,11 @@ func (s *suiteDirectory) TestDeleteRemovesMetadata(c *C) {
 	c.Assert(w.Code, Equals, http.StatusOK)
 
 	deleteURL := w.Header().Get("X-Url-Delete")
+	deletionToken := w.Header().Get("X-Deletion-Token")
 	deletePath := strings.TrimPrefix(deleteURL, "http://example.com")
 
 	req = httptest.NewRequest("DELETE", deletePath, nil)
+	req.Header.Set("X-Deletion-Token", deletionToken)
 	w = s.do(req)
 	c.Assert(w.Code, Equals, http.StatusOK)
 
@@ -356,8 +361,10 @@ func (s *suiteDirectory) TestEmptyDirectoryCleanupOnLastDelete(c *C) {
 	dirToken := strings.Trim(strings.TrimPrefix(dirURL, "http://example.com/"), "/")
 
 	deleteURL := w.Header().Get("X-Url-Delete")
+	deletionToken := w.Header().Get("X-Deletion-Token")
 	deletePath := strings.TrimPrefix(deleteURL, "http://example.com")
 	req = httptest.NewRequest("DELETE", deletePath, nil)
+	req.Header.Set("X-Deletion-Token", deletionToken)
 	w = s.do(req)
 	c.Assert(w.Code, Equals, http.StatusOK)
 

@@ -751,6 +751,14 @@ func dirIndexContainsFile(idx dirIndex, filename string) bool {
 	return false
 }
 
+func (s *Server) fileExistsInDir(ctx context.Context, dirToken, filename string) bool {
+	idx, err := s.loadDirIndex(ctx, dirToken)
+	if err != nil {
+		return false
+	}
+	return dirIndexContainsFile(idx, filename)
+}
+
 func (s *Server) cleanupOrphanedUpload(ctx context.Context, dirToken, filename string) {
 	if delErr := s.storage.Delete(ctx, dirToken, filename); delErr != nil && !s.storage.IsNotExist(delErr) {
 		s.logger.Printf("directory: failed to clean up orphaned file %s/%s: %v", dirToken, filename, delErr)
@@ -784,13 +792,17 @@ func (s *Server) putToDirHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	existedBefore := s.fileExistsInDir(r.Context(), dirToken, filename)
+
 	ok, contentLength := s.doPutUpload(w, r, dirToken, filename)
 	if !ok {
 		return
 	}
 
 	if err := s.registerFileInDir(r.Context(), dirToken, filename, contentLength); err != nil {
-		s.cleanupOrphanedUpload(r.Context(), dirToken, filename)
+		if !existedBefore {
+			s.cleanupOrphanedUpload(r.Context(), dirToken, filename)
+		}
 		s.respondError(w, http.StatusRequestEntityTooLarge, err.Error(), "directory: %v", err)
 		return
 	}
