@@ -529,11 +529,7 @@ func New(options ...OptionFn) (*Server, error) {
 	}
 
 	if !s.maxArchiveSizeSet {
-		if s.maxUploadSize > 0 {
-			s.maxArchiveSize = s.maxUploadSize
-		} else {
-			s.maxArchiveSize = defaultMaxUploadSize
-		}
+		s.maxArchiveSize = s.maxUploadSize
 	}
 
 	tokenA, err := token(s.randomTokenLength)
@@ -578,11 +574,8 @@ func (s *Server) isFromTrustedProxy(r *http.Request) bool {
 func (s *Server) remoteIP(r *http.Request) string {
 	if s.isFromTrustedProxy(r) {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			if idx := strings.IndexByte(xff, ','); idx >= 0 {
-				xff = strings.TrimSpace(xff[:idx])
-			}
-			if ip := net.ParseIP(strings.TrimSpace(xff)); ip != nil {
-				return ip.String()
+			if ip := s.clientIPFromXFF(xff); ip != "" {
+				return ip
 			}
 		}
 		if xri := r.Header.Get("X-Real-IP"); xri != "" {
@@ -592,6 +585,40 @@ func (s *Server) remoteIP(r *http.Request) string {
 		}
 	}
 	return ipAddrFromRemoteAddr(r.RemoteAddr)
+}
+
+// clientIPFromXFF extracts the client IP from an X-Forwarded-For header by
+// walking right-to-left and returning the first IP that is not a trusted proxy.
+// This prevents spoofing when a client prepends fake IPs to the header.
+func (s *Server) clientIPFromXFF(xff string) string {
+	parts := strings.Split(xff, ",")
+	for i := len(parts) - 1; i >= 0; i-- {
+		ipStr := strings.TrimSpace(parts[i])
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			continue
+		}
+		if !s.isTrustedIP(ip) {
+			return ip.String()
+		}
+	}
+	if len(parts) > 0 {
+		ipStr := strings.TrimSpace(parts[0])
+		if ip := net.ParseIP(ipStr); ip != nil {
+			return ip.String()
+		}
+	}
+	return ""
+}
+
+// isTrustedIP reports whether ip is within any of the configured trusted proxy CIDRs.
+func (s *Server) isTrustedIP(ip net.IP) bool {
+	for _, n := range s.trustedProxies {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // trustForwardedHeaders reports whether X-Forwarded-Proto and similar headers
@@ -775,17 +802,19 @@ func (s *Server) Run() {
 
 	cors := s.createCORSHandler()
 	h := securityHeadersHandler(
-		handlers.PanicHandler(
-			ipFilterHandler(
-				handlers.LogHandler(
-					LoveHandler(
-						s.RedirectHandler(cors(r))),
-					handlers.NewLogOptions(s.logger.Printf, "_default_"),
+		s.allowedHostsHandler(
+			handlers.PanicHandler(
+				ipFilterHandler(
+					handlers.LogHandler(
+						LoveHandler(
+							s.RedirectHandler(cors(r))),
+						handlers.NewLogOptions(s.logger.Printf, "_default_"),
+					),
+					s.ipFilterOptions,
+					s.remoteIP,
 				),
-				s.ipFilterOptions,
-				s.remoteIP,
+				nil,
 			),
-			nil,
 		),
 	)
 

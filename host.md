@@ -36,17 +36,18 @@ The CLI supports custom hosts via `--host` or `TRANSFER_HOST` environment variab
 | Flag | Env Var | Default | Description |
 |------|---------|---------|-------------|
 | `--listener` | `LISTENER` | `127.0.0.1:8080` | HTTP listen address |
-| `--tls-listener` | `TLS_LISTENER` | `127.0.0.1:8443` | HTTPS listen address |
+| `--tls-listener` | `TLS_LISTENER` | `""` | HTTPS listen address (e.g. `:443`) |
 | `--tls-listener-only` | `TLS_LISTENER_ONLY` | `false` | Listen only on TLS (no plain HTTP) |
 | `--tls-cert-file` | `TLS_CERT_FILE` | `""` | Path to TLS certificate file |
 | `--tls-private-key` | `TLS_PRIVATE_KEY` | `""` | Path to TLS private key file |
 | `--lets-encrypt-hosts` | `HOSTS` | `""` | Comma-separated hosts for Let's Encrypt auto-TLS |
-| `--lets-encrypt-cache` | `LETS_ENCRYPT_CACHE` | `"./cache/"` | Directory for Let's Encrypt certificate cache |
 | `--force-https` | `FORCE_HTTPS` | `false` | Redirect all HTTP to HTTPS |
 | `--proxy-path` | `PROXY_PATH` | `""` | URL prefix when behind a reverse proxy (e.g. `/sharing`) |
 | `--proxy-port` | `PROXY_PORT` | `""` | Port of the proxy when behind one |
 | `--profile-listener` | `PROFILE_LISTENER` | `""` | pprof debug listener (e.g. `127.0.0.1:6060`) |
 | `--profiler` | `PROFILER` | `false` | Enable Go pprof profiling |
+| `--trusted-proxies` | `TRUSTED_PROXIES` | `""` | Comma-separated CIDRs of trusted reverse proxies whose `X-Forwarded-For`/`X-Forwarded-Proto` headers will be honored |
+| `--allowed-hosts` | `ALLOWED_HOSTS` | `""` | Comma-separated allowed Host header values; when empty, all hosts are accepted |
 
 ### Storage Provider
 
@@ -126,15 +127,6 @@ Directory uploads always create or use a directory token. `MAX_DIR_SIZE` is enfo
 
 Compressed files are decompressed automatically on download and in directory archives. Range requests are disabled for transformed content because stored byte offsets do not match served bytes.
 
-### Timeouts
-
-| Flag | Env Var | Default | Description |
-|------|---------|---------|-------------|
-| `--read-header-timeout` | `READ_HEADER_TIMEOUT` | `10s` | HTTP read header timeout |
-| `--read-timeout` | `READ_TIMEOUT` | `5m` | HTTP read timeout |
-| `--write-timeout` | `WRITE_TIMEOUT` | `10m` | HTTP write timeout |
-| `--idle-timeout` | `IDLE_TIMEOUT` | `2m` | HTTP idle timeout |
-
 ### Virus Scanning
 
 | Flag | Env Var | Default | Description |
@@ -155,9 +147,20 @@ Compressed files are decompressed automatically on download and in directory arc
 | `--ga-key` | `GA_KEY` | `""` | Google Analytics tracking ID |
 | `--uservoice-key` | `USERVOICE_KEY` | `""` | UserVoice widget key |
 
+### HTTP Timeouts (Defaults)
+
+The following timeouts are hardcoded defaults (not configurable via flags):
+
+| Timeout | Default | Description |
+|---------|---------|-------------|
+| Read Header | `10s` | Time to read request headers |
+| Read | `5m` | Time to read the entire request |
+| Write | `10m` | Time to write the response |
+| Idle | `2m` | Keep-alive idle time |
+
 ### Supported Go / CI
 
-The module targets Go `1.26` with toolchain `go1.26.4`. CI installs Go `1.26.4` for tests, formatting, security scanning, Docker/release builds, and builds golangci-lint from source with that same Go version so linting supports the module target.
+The module targets Go `1.26.0` with toolchain `go1.26.4`. CI installs Go `1.26.4` for tests, formatting, security scanning, Docker/release builds, and builds golangci-lint from source with that same Go version so linting supports the module target.
 
 ## Hosting Scenarios
 
@@ -175,6 +178,20 @@ transfer.ng --provider=local \
 
 The `--insecure` flag disables IP filtering and CORS checks since the reverse proxy handles those. The `--proxy-path` tells the app it's served under a sub-path.
 
+#### With Trusted Proxies
+
+When behind a reverse proxy and you want accurate client IPs for rate limiting or IP filtering:
+
+```bash
+transfer.ng --provider=local \
+    --listener 127.0.0.1:8080 \
+    --basedir /data \
+    --trusted-proxies 127.0.0.1/32,10.0.0.0/8 \
+    --insecure
+```
+
+This tells transfer.ng to trust `X-Forwarded-For` and `X-Forwarded-Proto` headers from the specified CIDRs.
+
 ### Public-Facing with Let's Encrypt
 
 ```bash
@@ -185,6 +202,8 @@ transfer.ng --provider=local \
     --force-https \
     --basedir /data
 ```
+
+Let's Encrypt certificates are cached in `./cache/` by default.
 
 ### Public-Facing with Own TLS Certificates
 
@@ -238,13 +257,119 @@ transfer.ng --provider=s3 \
     --bucket transfers
 ```
 
+### With Rate Limiting
+
+```bash
+transfer.ng --provider=local \
+    --listener :8080 \
+    --basedir /data \
+    --rate-limit 60 \
+    --rate-limit-uploads 30 \
+    --rate-limit-archives 10
+```
+
+Limits per IP per minute: 60 downloads, 30 uploads, 10 archive downloads.
+
+### With Directory Size Limits
+
+```bash
+transfer.ng --provider=local \
+    --listener :8080 \
+    --basedir /data \
+    --max-dir-size 5g \
+    --max-dir-files 100
+```
+
+Each directory is capped at 5GB or 100 files. When a new upload would exceed the limit, the oldest files are deleted automatically.
+
+### With Virus Scanning
+
+```bash
+transfer.ng --provider=local \
+    --listener :8080 \
+    --basedir /data \
+    --clamav-host unix:///var/run/clamav/clamd.ctl \
+    --perform-clamav-prescan
+```
+
+Uploads are scanned by ClamAV before being stored. Infected files are rejected.
+
 ## Docker
+
+### Basic Usage
 
 ```bash
 docker run -p 8080:8080 \
     -v /data:/data \
     transfer.ng:latest \
     --provider local --basedir /data
+```
+
+### Build Custom Image
+
+```bash
+# Build the image
+docker build -t transfer.ng:latest .
+
+# Run with local storage
+docker run -p 8080:8080 transfer.ng:latest --provider local --basedir /data
+```
+
+### Non-Root User
+
+Build with a specific user to avoid running as root:
+
+```bash
+docker build -t transfer.ng:noroot \
+    --build-arg RUNAS=transferng \
+    --build-arg PUID=1000 \
+    --build-arg PGID=1000 .
+docker run -p 8080:8080 transfer.ng:noroot --provider local --basedir /data
+```
+
+### Docker Compose
+
+```yaml
+version: '3.8'
+
+services:
+  transfer.ng:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GO_VERSION: '1.26.4'
+        RUNAS: transferng
+    container_name: transfer-ng
+    ports:
+      - "8080:8080"
+    environment:
+      - PROVIDER=local
+      - BASEDIR=/data
+      - TEMP_PATH=/tmp
+      - MAX_UPLOAD_SIZE=0
+      - RATE_LIMIT=0
+      - PURGE_DAYS=0
+    volumes:
+      - transfer-data:/data
+      - transfer-tmp:/tmp
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  transfer-data:
+  transfer-tmp:
+```
+
+Run with:
+
+```bash
+docker-compose up -d
 ```
 
 ## Environment Variables Only
@@ -256,4 +381,36 @@ export PROVIDER=local
 export LISTENER=:8080
 export BASEDIR=/data
 transfer.ng
+```
+
+## Nginx Reverse Proxy Example
+
+```nginx
+server {
+    listen 80;
+    server_name transfer.example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # For large file uploads
+        client_max_body_size 0;
+        proxy_request_buffering off;
+        proxy_buffering off;
+    }
+}
+```
+
+When using this setup, run transfer.ng with:
+
+```bash
+transfer.ng --provider=local \
+    --listener 127.0.0.1:8080 \
+    --basedir /data \
+    --insecure \
+    --trusted-proxies 127.0.0.1/32
 ```

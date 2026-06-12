@@ -509,13 +509,13 @@ func addBasicOptions(c *cli.Context, options *[]server.OptionFn, logger *log.Log
 		*options = append(*options, server.PerformClamavPrescan(true))
 	}
 
-	if v := c.Int64("max-upload-size"); v > 0 {
-		*options = append(*options, server.MaxUploadSize(v))
-	}
-
 	addIntOption(c, options, "rate-limit", server.RateLimit)
 	addIntOption(c, options, "rate-limit-uploads", server.RateLimitUploads)
 	addIntOption(c, options, "rate-limit-archives", server.RateLimitArchives)
+
+	if v := c.Int64("max-upload-size"); v >= 0 {
+		*options = append(*options, server.MaxUploadSize(v))
+	}
 
 	*options = append(*options, server.RandomTokenLength(c.Int("random-token-length")))
 

@@ -55,10 +55,6 @@ const maxPathDepth = 10
 const maxPathLength = 1024
 const maxTokenLength = 200
 
-// defaultMaxUploadSize is the default maximum upload size (10GB) when maxUploadSize is not configured.
-// This prevents unbounded uploads that could exhaust disk space.
-const defaultMaxUploadSize = 10 * 1024 * 1024 * 1024
-
 var idnaConverter = idna.New(idna.ValidateForRegistration())
 
 func stripPrefix(p string) string {
@@ -688,12 +684,8 @@ func (s *Server) copyAndValidateFile(w http.ResponseWriter, file *os.File, f io.
 		return 0, err
 	}
 
-	maxSize := s.maxUploadSize
-	if maxSize <= 0 {
-		maxSize = defaultMaxUploadSize
-	}
-	if n > maxSize {
-		s.logger.Printf("Entity too large: %d > %d", n, maxSize)
+	if s.maxUploadSize > 0 && n > s.maxUploadSize {
+		s.logger.Printf("Entity too large: %d > %d", n, s.maxUploadSize)
 		http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
 		return 0, errors.New("entity too large")
 	}
@@ -728,10 +720,8 @@ func (s *Server) addResponseURL(w http.ResponseWriter, r *http.Request, uploadTo
 
 	relativeURL, _ := url.Parse(path.Join(s.proxyPath, uploadToken, escapedPath))
 	deleteURL, _ := url.Parse(path.Join(s.proxyPath, uploadToken, escapedPath))
-	q := deleteURL.Query()
-	q.Set("delete", storedMeta.DeletionToken)
-	deleteURL.RawQuery = q.Encode()
 	w.Header().Add("X-Url-Delete", s.resolveURL(r, deleteURL))
+	w.Header().Set("X-Deletion-Token", storedMeta.DeletionToken)
 	responseBody.WriteString(s.getURL(r).ResolveReference(relativeURL).String())
 	responseBody.WriteString("\n")
 	return true
@@ -845,6 +835,9 @@ func (s *Server) putHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.saveDirIndex(r.Context(), putToken, idx); err != nil {
 		s.logger.Printf("put: failed to save directory index: %v", err)
+		s.cleanupOrphanedUpload(r.Context(), putToken, filename)
+		http.Error(w, "Could not save file", http.StatusInternalServerError)
+		return
 	}
 
 	s.writePutResponse(w, r, putToken, filename, uploadToken)
@@ -918,12 +911,8 @@ func (s *Server) bufferFileToTemp(w http.ResponseWriter, file *os.File, requestB
 }
 
 func (s *Server) validateUploadSize(w http.ResponseWriter, contentLength int64) bool {
-	maxSize := s.maxUploadSize
-	if maxSize <= 0 {
-		maxSize = defaultMaxUploadSize
-	}
-	if contentLength > maxSize {
-		s.logger.Printf("Entity too large: %d > %d", contentLength, maxSize)
+	if s.maxUploadSize > 0 && contentLength > s.maxUploadSize {
+		s.logger.Printf("Entity too large: %d > %d", contentLength, s.maxUploadSize)
 		http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
 		return false
 	}
@@ -947,13 +936,11 @@ func (s *Server) handleUploadError(w http.ResponseWriter, err error) bool {
 }
 
 // limitRequestBody wraps r.Body with http.MaxBytesReader to prevent unbounded reads.
-// Uses maxUploadSize if configured, otherwise falls back to defaultMaxUploadSize.
+// When maxUploadSize is 0, no limit is applied.
 func (s *Server) limitRequestBody(w http.ResponseWriter, r *http.Request) {
-	maxSize := s.maxUploadSize
-	if maxSize <= 0 {
-		maxSize = defaultMaxUploadSize
+	if s.maxUploadSize > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, s.maxUploadSize+1)
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxSize+1)
 }
 
 func (s *Server) validateDirFileSize(w http.ResponseWriter, contentLength int64) bool {
@@ -1130,11 +1117,9 @@ func (s *Server) writePutResponse(w http.ResponseWriter, r *http.Request, putTok
 	escapedPath := escapePathForURL(filename)
 	relativeURL, _ := url.Parse(path.Join(s.proxyPath, putToken, escapedPath))
 	deleteURL, _ := url.Parse(path.Join(s.proxyPath, putToken, escapedPath))
-	q := deleteURL.Query()
-	q.Set("delete", storedMeta.DeletionToken)
-	deleteURL.RawQuery = q.Encode()
 
 	w.Header().Set("X-Url-Delete", s.resolveURL(r, deleteURL))
+	w.Header().Set("X-Deletion-Token", storedMeta.DeletionToken)
 	s.writeDirHeaders(w, r, putToken, uploadToken)
 	// URL is constructed from server-generated token and sanitized filename
 	// #nosec G705 -- all URL components are server-controlled or sanitized
@@ -1812,27 +1797,34 @@ func (s *Server) headHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	contentType := metadata.ContentType
-	contentLength, err := s.storage.Head(r.Context(), token, filename)
-	if s.storage.IsNotExist(err) {
-		s.respondError(w, http.StatusNotFound, "", "")
-		return
-	}
-	if err != nil {
-		s.respondError(w, http.StatusInternalServerError, "Could not retrieve file.", "%v", err)
-		return
+	password := r.Header.Get("X-Decrypt-Password")
+	contentType := metadata.contentTypeForPassword(password)
+	contentLength := metadata.ContentLength
+	rangesSupported := s.storage.IsRangeSupported() && !metadata.Compressed && (!metadata.Encrypted || password == "")
+
+	if !metadata.Compressed && (!metadata.Encrypted || password == "") {
+		storedLength, err := s.storage.Head(r.Context(), token, filename)
+		if s.storage.IsNotExist(err) {
+			s.respondError(w, http.StatusNotFound, "", "")
+			return
+		}
+		if err != nil {
+			s.respondError(w, http.StatusInternalServerError, "Could not retrieve file.", "%v", err)
+			return
+		}
+		contentLength = storage.SafeUint64ToInt64(storedLength)
 	}
 
 	remainingDownloads, remainingDays := metadata.remainingLimitHeaderValues()
 
 	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Content-Length", strconv.FormatUint(contentLength, 10))
+	w.Header().Set("Content-Length", strconv.FormatInt(contentLength, 10))
 	w.Header().Set("Connection", "close")
 	w.Header().Set("X-Remaining-Downloads", remainingDownloads)
 	w.Header().Set("X-Remaining-Days", remainingDays)
 	w.Header().Set("Vary", "Accept, Range, Referer, X-Decrypt-Password")
 
-	if s.storage.IsRangeSupported() {
+	if rangesSupported {
 		w.Header().Set("Accept-Ranges", "bytes")
 	}
 }
@@ -2129,6 +2121,16 @@ func securityHeadersHandler(h http.Handler) http.HandlerFunc {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-XSS-Protection", "1; mode=block")
+		h.ServeHTTP(w, r)
+	}
+}
+
+func (s *Server) allowedHostsHandler(h http.Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if len(s.allowedHosts) > 0 && s.validateHost(r) == "" {
+			http.Error(w, "Invalid Host header", http.StatusBadRequest)
+			return
+		}
 		h.ServeHTTP(w, r)
 	}
 }
