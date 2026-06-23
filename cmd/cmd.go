@@ -267,7 +267,7 @@ var globalFlags = []cli.Flag{
 	},
 	&cli.StringFlag{
 		Name:    "log",
-		Usage:   "/var/log/transfersh.log",
+		Usage:   "/var/log/transfer-ng.log",
 		Value:   "",
 		EnvVars: []string{"LOG"},
 	},

@@ -4,6 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{.Filename}}</title>
+  <meta name="description" content="Preview and download text file {{.Filename}} from {{.Hostname}}. Size: {{.ContentLength}} bytes. Type: {{.ContentType}}.">
+  <link rel="canonical" href="{{.URL}}">
+  <meta name="robots" content="noindex,nofollow">
   <meta property="og:type" content="website">
   <meta property="og:title" content="{{.Filename}}">
   <meta property="og:description" content="{{.Filename}} - {{.ContentLength}} bytes - {{.ContentType}}">

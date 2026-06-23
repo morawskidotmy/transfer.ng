@@ -226,7 +226,7 @@ transfer.ng --provider=local --listener :8080 --basedir /data/
 | `COMPRESS_LARGE` | Compress files larger than this (e.g., `10m`) |
 | `MAX_DIR_SIZE` | Rolling directory size cap (e.g., `5g`); oldest files are deleted on new upload to stay under the cap |
 | `MAX_DIR_FILES` | Max files in a directory; `0` means unlimited |
-| `RANDOM_TOKEN_LENGTH` | Length of random tokens (default: 6) |
+| `RANDOM_TOKEN_LENGTH` | Length of random tokens (default: 10) |
 | `CORS_DOMAINS` | Comma-separated CORS allowed domains |
 | `HTTP_AUTH_USER` | Basic auth username |
 | `HTTP_AUTH_PASS` | Basic auth password |
@@ -255,6 +255,8 @@ transfer.ng --provider=storj \
 ```
 
 #### Google Drive
+
+Google Drive storage does not support nested paths. Uploads with `/` in the filename are rejected by that backend.
 
 ```bash
 transfer.ng --provider=gdrive \
@@ -349,15 +351,20 @@ transfer --workers=16 --host=https://custom.server.com largefolder/
 
 ### Options
 
-- `--host=URL` - Server URL (default: https://transfer.morawski.my)
-- `--workers=N` - Number of parallel upload workers (default: 8)
+- `--host=URL` - Server URL (default: `https://transfer.morawski.my`)
+- `--workers=N` - Number of parallel upload workers. When omitted, the CLI auto-tunes concurrency.
+- `--delay=MS` - Minimum delay between requests in milliseconds (default: `500`)
 - `--insecure` - Disable TLS verification
+- `--update` - Update the CLI to the latest version and exit
+- `--version`, `-v` - Show version
+- `--help`, `-h` - Show help
 
 ### Environment Variables
 
 - `TRANSFER_HOST` - Server URL
-- `TRANSFER_WORKERS` - Number of parallel workers
-- `TRANSFER_MAX_RETRIES` - Maximum retry attempts (default: 3)
+- `TRANSFER_WORKERS` - Number of parallel workers; setting it disables auto-tuning
+- `TRANSFER_MAX_RETRIES` - Maximum retry attempts (default: `0`, which means unlimited)
+- `TRANSFER_MIN_DELAY` - Minimum delay between requests in milliseconds (default: `500`)
 
 ## Credits
 

@@ -154,11 +154,11 @@ Existing transfer.sh client scripts will continue to work. The extra headers are
 
 The diff percentage badge in the README shows how much of the Go codebase differs from transfer.sh. Key areas of divergence:
 
-- `server/handlers.go` - New directory handlers (`postDirHandler`, `putToDirHandler`)
-- `server/directory.go` - New directory management logic
-- `server/metadata.go` - Extended metadata for upload tokens
-- `server/storage/` - Minor interface additions
-- `cmd/cmd.go` - New CLI flags (`--max-dir-size`, `--max-dir-files`)
+- `server/directory.go` - Directory creation, listing, archive, and delete logic
+- `server/handlers.go` - Upload, download, metadata, and response header logic
+- `server/server.go` - Routing for directory, archive, and nested-path endpoints
+- `server/storage/` - Storage backend support for nested paths and range handling
+- `cmd/cmd.go` - CLI flags including `--max-dir-size`, `--max-dir-files`, and archive limits
 
 ## Why Fork?
 

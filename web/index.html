@@ -3,15 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{.Hostname}} - File Sharing</title>
+  <title>{{.Hostname}} - Secure File Sharing</title>
+  <meta name="description" content="Upload and share files from the command line with transfer.ng. Supports directories, upload tokens, archive downloads, encryption, and expiring links.">
+  <link rel="canonical" href="{{.WebAddress}}">
+  <meta name="robots" content="index,follow">
   <meta property="og:type" content="website">
-  <meta property="og:title" content="{{.Hostname}} - File Sharing">
-  <meta property="og:description" content="Secure file sharing service. Upload and share files easily.">
+  <meta property="og:title" content="{{.Hostname}} - Secure File Sharing">
+  <meta property="og:description" content="Upload and share files from the command line with directory support, archive downloads, encryption, and expiring links.">
   <meta property="og:url" content="{{.WebAddress}}">
   <meta property="og:site_name" content="{{.Hostname}}">
   <meta name="twitter:card" content="summary">
-  <meta name="twitter:title" content="{{.Hostname}} - File Sharing">
-  <meta name="twitter:description" content="Secure file sharing service. Upload and share files easily.">
+  <meta name="twitter:title" content="{{.Hostname}} - Secure File Sharing">
+  <meta name="twitter:description" content="Upload and share files from the command line with directory support, archive downloads, encryption, and expiring links.">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     :root {
@@ -247,7 +250,10 @@
       <pre>transfer file.txt           # Single file
 transfer file1 file2 file3  # Multiple files
 transfer myfolder/          # Directory (preserves structure)
-transfer --workers=16 big/  # Custom parallelism</pre>
+transfer --workers=16 big/  # Custom parallelism
+
+transfer --host=https://files.example.com file.txt
+TRANSFER_MAX_RETRIES=0 transfer myfolder/  # 0 = unlimited retries</pre>
     </div>
 
     <div class="grid">
@@ -280,7 +286,7 @@ transfer --workers=16 big/  # Custom parallelism</pre>
         </div>
         <pre>cd ./myfolder && find . -type f | xargs -P 8 -I {} \
   curl -H "X-Upload-Token: SECRET" \
-  --upload-file {} {{.WebAddress}}TOKEN/{}</pre>
+  --upload-file {} "{{.WebAddress}}TOKEN/{}"</pre>
         <div class="description">
           List the files in a directory:
         </div>
@@ -288,8 +294,8 @@ transfer --workers=16 big/  # Custom parallelism</pre>
         <div class="description">
           Download all files as an archive:
         </div>
-        <pre>curl -O {{.WebAddress}}TOKEN/.zip
-curl -O {{.WebAddress}}TOKEN/.tar.gz</pre>
+        <pre>curl -O {{.WebAddress}}zip/TOKEN/
+curl -O {{.WebAddress}}tar.gz/TOKEN/</pre>
         <div class="description">
           Delete a directory and all its files:
         </div>
@@ -345,7 +351,7 @@ curl -O {{.WebAddress}}TOKEN/.tar.gz</pre>
         <div class="description">
           If file is encrypted, provide the password:
         </div>
-        <pre>curl {{.WebAddress}}get/token123/file.txt \
+        <pre>curl {{.WebAddress}}token123/file.txt \
   -H "X-Decrypt-Password: your_password" \
   -o file.txt</pre>
       </div>

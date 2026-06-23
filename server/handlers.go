@@ -1554,7 +1554,7 @@ func (s *Server) zipHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	zipfilename := fmt.Sprintf("transfersh-%d.zip", time.Now().UnixNano())
+	zipfilename := fmt.Sprintf("transfer-ng-%d.zip", time.Now().UnixNano())
 
 	w.Header().Set("Content-Type", "application/zip")
 	commonHeader(w, zipfilename)
@@ -1642,7 +1642,7 @@ func (s *Server) tarGzHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tarfilename := fmt.Sprintf("transfersh-%d.tar.gz", time.Now().UnixNano())
+	tarfilename := fmt.Sprintf("transfer-ng-%d.tar.gz", time.Now().UnixNano())
 
 	w.Header().Set("Content-Type", "application/x-gzip")
 	commonHeader(w, tarfilename)
@@ -1725,7 +1725,7 @@ func (s *Server) tarHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tarfilename := fmt.Sprintf("transfersh-%d.tar", time.Now().UnixNano())
+	tarfilename := fmt.Sprintf("transfer-ng-%d.tar", time.Now().UnixNano())
 
 	w.Header().Set("Content-Type", "application/x-tar")
 	commonHeader(w, tarfilename)

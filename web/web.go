@@ -5,7 +5,7 @@ import (
 	"io/fs"
 )
 
-// FS contains the embedded web assets (HTML templates, CSS, JS).
+// FS contains the embedded web assets (HTML templates, text templates, and icons).
 //
 //go:embed *.html *.txt *.ico
 var FS embed.FS

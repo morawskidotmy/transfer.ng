@@ -88,7 +88,7 @@ The CLI supports custom hosts via `--host` or `TRANSFER_HOST` environment variab
 
 | Flag | Env Var | Default | Description |
 |------|---------|---------|-------------|
-| `--insecure` | `INSECURE` | `false` | **Disable** IP filtering and CORS checks — use only when a reverse proxy or firewall handles security |
+| `--insecure` | `INSECURE` | `false` | **Disable** built-in IP filtering — use only when a reverse proxy or firewall handles network access |
 | `--ip-whitelist` | `IP_WHITELIST` | `""` | Comma-separated IPs allowed to connect |
 | `--ip-blacklist` | `IP_BLACKLIST` | `""` | Comma-separated IPs denied from connecting |
 | `--http-auth-user` | `HTTP_AUTH_USER` | `""` | HTTP basic auth username |
@@ -176,7 +176,7 @@ transfer.ng --provider=local \
     --proxy-path /sharing
 ```
 
-The `--insecure` flag disables IP filtering and CORS checks since the reverse proxy handles those. The `--proxy-path` tells the app it's served under a sub-path.
+The `--insecure` flag disables built-in IP filtering so the reverse proxy or firewall can enforce network access instead. CORS behavior is still controlled separately with `--cors-domains`. The `--proxy-path` flag tells the app it's served under a sub-path.
 
 #### With Trusted Proxies
 

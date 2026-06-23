@@ -1,309 +1,215 @@
-# Table of Contents
+# Examples
 
-* [Transfer CLI (Recommended)](#transfer-cli-recommended)
-* [Uploading and downloading](#uploading-and-downloading)
-* [Archiving and backups](#archiving-and-backups)
-* [Encrypting and decrypting](#encrypting-and-decrypting)
-* [Scanning for viruses](#scanning-for-viruses)
-* [Uploading and copy download command](#uploading-and-copy-download-command)
-* [Uploading and displaying URL and deletion token](#uploading-and-displaying-url-and-deletion-token)
+This page shows current `transfer.ng` workflows. Replace `https://transfer.morawski.my` with your own host when self-hosting.
 
-## Transfer CLI (Recommended)
-<a name="transfer-cli-recommended"/>
+## Transfer CLI
 
-The fastest way to upload files and directories with parallel uploads, automatic retries, and progress tracking:
+Install the CLI:
 
 ```bash
-# Install the CLI (builds from source, installs to ~/.local/bin)
 curl -sL https://raw.githubusercontent.com/morawskidotmy/transfer.ng/main/install-transfer.sh | bash
+```
 
-# Upload a single file
+Upload with the CLI:
+
+```bash
+# Single file
 transfer file.txt
 
-# Upload multiple files
+# Multiple files
 transfer file1.txt file2.txt file3.txt
 
-# Upload a directory (preserves folder structure)
+# Directory upload with preserved structure
 transfer myfolder/
 
-# Upload with custom parallelism
+# Explicit concurrency instead of auto-tuned workers
 transfer --workers=16 largefolder/
 
-# Use with self-hosted instance
-transfer --host=https://my.server.com file.txt
+# Use a self-hosted instance
+transfer --host=https://files.example.com file.txt
 ```
 
-**Features:**
-- Parallel uploads with configurable worker pool (default: 8 workers)
-- Directory support with preserved folder structure
-- Multiple file/directory arguments in a single command
-- Automatic retry with exponential backoff (default: 3 retries)
-- Colored progress output
-- Configurable via flags and environment variables
+CLI flags and environment variables:
 
-**Environment Variables:**
-- `TRANSFER_HOST` - Server URL (default: https://transfer.morawski.my)
-- `TRANSFER_WORKERS` - Number of parallel workers (default: 8)
-- `TRANSFER_MAX_RETRIES` - Maximum retry attempts (default: 3)
+- `--host=URL` or `TRANSFER_HOST`
+- `--workers=N` or `TRANSFER_WORKERS`
+- `--delay=MS` or `TRANSFER_MIN_DELAY`
+- `TRANSFER_MAX_RETRIES` with default `0` for unlimited retries
+- `--insecure` to disable TLS verification
+- `--update` to self-update
 
-## Uploading and Downloading
-<a name="uploading-and-downloading"/>
+## Single-File Uploads
 
-### Uploading with wget
+Upload a file with curl:
+
 ```bash
-$ wget --method PUT --body-file=/tmp/file.tar https://transfer.sh/file.tar -O - -nv 
+curl --upload-file ./hello.txt https://transfer.morawski.my/hello.txt
 ```
 
-### Uploading with PowerShell
-```posh
-PS H:\> invoke-webrequest -method put -infile .\file.txt https://transfer.sh/file.txt 
-```
+Upload from standard input:
 
-### Upload using HTTPie
 ```bash
-$ http https://transfer.sh/ -vv < /tmp/test.log 
+grep 'error' /var/log/app.log | curl --upload-file - https://transfer.morawski.my/errors.log
 ```
 
-### Uploading a filtered text file
+Upload with PowerShell:
+
+```powershell
+Invoke-WebRequest -Method Put -InFile .\file.txt https://transfer.morawski.my/file.txt
+```
+
+Upload with wget:
+
 ```bash
-$ grep 'pound' /var/log/syslog | curl --upload-file - https://transfer.sh/pound.log 
+wget --method PUT --body-file=/tmp/file.tar https://transfer.morawski.my/file.tar -O - -nv
 ```
 
-### Downloading with curl
+## Directory Workflow
+
+Create an empty directory and get an upload token:
+
 ```bash
-$ curl https://transfer.sh/1lDau/test.txt -o test.txt
+curl -i -X POST https://transfer.morawski.my/dir
 ```
 
-### Downloading with wget
+Add a file to that directory:
+
 ```bash
-$ wget https://transfer.sh/1lDau/test.txt
+curl --upload-file ./report.pdf \
+    https://transfer.morawski.my/TOKEN/report.pdf \
+    -H "X-Upload-Token: SECRET"
 ```
 
-## Archiving and backups
-<a name="archiving-and-backups"/>
+Upload nested paths into the same directory:
 
-### Backup, encrypt and transfer a MySQL dump
 ```bash
-$ mysqldump --all-databases | gzip | gpg -ac -o- | curl -X PUT --upload-file "-" https://transfer.sh/test.txt
+curl --upload-file ./src/main.go \
+    https://transfer.morawski.my/TOKEN/src/main.go \
+    -H "X-Upload-Token: SECRET"
 ```
 
-### Archive and upload directory
+Upload a whole folder with plain curl:
+
 ```bash
-$ tar -czf - /var/log/journal | curl --upload-file - https://transfer.sh/journal.tar.gz
+cd ./myfolder && find . -type f | xargs -P 8 -I {} \
+    curl -H "X-Upload-Token: SECRET" \
+        --upload-file {} "https://transfer.morawski.my/TOKEN/{}"
 ```
 
-### Uploading multiple files at once
+List a directory:
+
 ```bash
-$ curl -i -F filedata=@/tmp/hello.txt -F filedata=@/tmp/hello2.txt https://transfer.sh/
+curl https://transfer.morawski.my/TOKEN/
 ```
 
-### Combining downloads as zip or tar.gz archive
+Delete a directory and all files in it:
+
 ```bash
-$ curl https://transfer.sh/archive/tar.gz/15HKz/hello.txt,15HKz/hello.txt
-$ curl https://transfer.sh/archive/zip/15HKz/hello.txt,15HKz/hello.txt
+curl -X DELETE https://transfer.morawski.my/TOKEN/ \
+    -H "X-Upload-Token: SECRET"
 ```
 
-### Transfer and send email with link (using an alias)
+## Downloads
+
+Download a file:
+
 ```bash
-$ transfer /tmp/hello.txt | mail -s "Hello World" user@yourmaildomain.com 
+curl https://transfer.morawski.my/TOKEN/hello.txt -o hello.txt
 ```
-## Encrypting and decrypting
-<a name="encrypting-and-decrypting"/>
 
-### Encrypting files with password using gpg
+Force direct download behavior:
+
 ```bash
-$ gpg --armor --symmetric --output - /tmp/hello.txt | curl --upload-file - https://transfer.sh/test.txt
+curl https://transfer.morawski.my/download/TOKEN/hello.txt -o hello.txt
 ```
 
-### Downloading and decrypting
+Fetch only headers:
+
 ```bash
-$ curl https://transfer.sh/1lDau/test.txt | gpg --decrypt --output /tmp/hello.txt
+curl -I https://transfer.morawski.my/TOKEN/hello.txt
 ```
 
-### Import keys from [keybase](https://keybase.io/)
+## Archive Downloads
+
+Download a whole directory as zip:
+
 ```bash
-$ keybase track [them] # Encrypt for recipient(s)
-$ cat somebackupfile.tar.gz | keybase encrypt [them] | curl --upload-file '-' https://transfer.sh/test.txt # Decrypt
-$ curl https://transfer.sh/sqUFi/test.md | keybase decrypt
+curl -O https://transfer.morawski.my/zip/TOKEN/
 ```
 
-## Scanning for viruses
-<a name="scanning-for-viruses"/>
+Download a whole directory as tar.gz:
 
-### Scan for malware or viruses using Clamav
 ```bash
-$ wget http://www.eicar.org/download/eicar.com
-$ curl -X PUT --upload-file ./eicar.com https://transfer.sh/eicar.com/scan
+curl -O https://transfer.morawski.my/tar.gz/TOKEN/
 ```
 
-### Upload malware to VirusTotal, get a permalink in return
+Download a subdirectory as zip:
+
 ```bash
-$ curl -X PUT --upload-file nhgbhhj https://transfer.sh/test.txt/virustotal 
+curl -O https://transfer.morawski.my/zip/TOKEN/photos/2026/
 ```
 
-### Upload encrypted password protected files
+## Upload Options
 
-By default files upload for only 1 download, you can specify download limit using -D flag like `transfer-encrypted -D 50 %file/folder%`
+Limit downloads:
 
-#### One line for bashrc
 ```bash
-transfer-encrypted() { if [ $# -eq 0 ]; then echo "No arguments specified.\nUsage:\n transfer <file|directory>\n ... | transfer <file_name>" >&2; return 1; fi; while getopts ":D:" opt; do case $opt in D) max_downloads=$OPTARG;; \?) echo "Invalid option: -$OPTARG" >&2;; esac; done; shift "$((OPTIND - 1))"; file="$1"; file_name=$(basename "$file"); if [ ! -e "$file" ]; then echo "$file: No such file or directory" >&2; return 1; fi; if [ -d "$file" ]; then file_name="$file_name.zip"; (cd "$file" && zip -r -q - .) | openssl aes-256-cbc -pbkdf2 -e > "tmp-$file_name" && cat "tmp-$file_name" | curl -H "Max-Downloads: $max_downloads" -w '\n' --upload-file "tmp-$file_name" "https://transfer.sh/$file_name" | tee /dev/null; rm "tmp-$file_name"; else cat "$file" | openssl aes-256-cbc -pbkdf2 -e > "tmp-$file" && cat "tmp-$file" | curl -H "Max-Downloads: $max_downloads" -w '\n' --upload-file - "https://transfer.sh/$file_name" | tee /dev/null; rm "tmp-$file"; fi; }
+curl --upload-file ./file.txt https://transfer.morawski.my/file.txt \
+    -H "Max-Downloads: 5"
 ```
-#### Human readable code 
+
+Set expiration:
+
 ```bash
-transfer-encrypted() {
-    if [ $# -eq 0 ]; then
-        echo "No arguments specified.\nUsage:\n transfer <file|directory>\n ... | transfer <file_name>" >&2
-        return 1
-    fi
-
-    while getopts ":D:" opt; do
-        case $opt in
-            D)
-                max_downloads=$OPTARG
-                ;;
-            \?)
-                echo "Invalid option: -$OPTARG" >&2
-                ;;
-        esac
-    done
-
-    shift "$((OPTIND - 1))"
-    file="$1"
-    file_name=$(basename "$file")
-
-    if [ ! -e "$file" ]; then
-        echo "$file: No such file or directory" >&2
-        return 1
-    fi
-
-    if [ -d "$file" ]; then
-        file_name="$file_name.zip"
-        (cd "$file" && zip -r -q - .) | openssl aes-256-cbc -pbkdf2 -e > "tmp-$file_name" && cat "tmp-$file_name" | curl -H "Max-Downloads: $max_downloads" -w '\n' --upload-file "tmp-$file_name" "https://transfer.sh/$file_name" | tee /dev/null
-        rm "tmp-$file_name"
-    else
-        cat "$file" | openssl aes-256-cbc -pbkdf2 -e > "tmp-$file" && cat "tmp-$file" | curl -H "Max-Downloads: $max_downloads" -w '\n' --upload-file - "https://transfer.sh/$file_name" | tee /dev/null
-        rm "tmp-$file"
-    fi
-}
+curl --upload-file ./file.txt https://transfer.morawski.my/file.txt \
+    -H "Max-Days: 7"
 ```
-#### Decrypt using
+
+Encrypt on upload:
+
 ```bash
-curl -s https://transfer.sh/some/file | openssl aes-256-cbc -pbkdf2 -d > output_filename
+curl --upload-file ./secret.txt https://transfer.morawski.my/secret.txt \
+    -H "X-Encrypt-Password: mysecret"
 ```
 
-## Uploading and copy download command
+Decrypt on download:
 
-Download commands can be automatically copied to the clipboard after files are uploaded using transfer.sh.
-
-It was designed for Linux or macOS.
-
-### 1. Install xclip or xsel for Linux, macOS skips this step
-
-- install xclip see https://command-not-found.com/xclip
-
-- install xsel  see https://command-not-found.com/xsel
-
-Install later, add pbcopy and pbpaste to .bashrc or .zshrc or its equivalent.
-
-- If use xclip, paste the following lines:
-
-```sh
-alias pbcopy='xclip -selection clipboard'
-alias pbpaste='xclip -selection clipboard -o'
-```
-
-- If use xsel, paste the following lines:
-
-```sh
-alias pbcopy='xsel --clipboard --input'
-alias pbpaste='xsel --clipboard --output'
-```
-
-### 2. Add Uploading and copy download command shell function
-
-1. Open .bashrc or .zshrc  or its equivalent.
-
-2. Add the following shell script:
-
-   ```sh
-   transfer() {
-     curl --progress-bar --upload-file "$1" https://transfer.sh/$(basename "$1") | pbcopy;
-     echo "1) Download link:"
-     echo "$(pbpaste)"
-   
-     echo "\n2) Linux or macOS download command:"
-     linux_macos_download_command="wget $(pbpaste)"
-     echo $linux_macos_download_command
-   
-     echo "\n3) Windows download command:"
-     windows_download_command="Invoke-WebRequest -Uri "$(pbpaste)" -OutFile $(basename $1)"
-     echo $windows_download_command
-   
-     case $2 in
-       l|m)  echo $linux_macos_download_command | pbcopy
-       ;;
-       w)  echo $windows_download_command | pbcopy
-       ;;
-     esac
-   }
-   ```
-
-
-### 3. Test
-
-The transfer command has two parameters:
-
-1. The first parameter is the path to upload the file.
-
-2. The second parameter indicates which system's download command is copied. optional:
-
-   - This parameter is empty to copy the download link.
-
-   - `l` or `m` copy the Linux or macOS command that downloaded the file.
-
-   -  `w` copy the Windows command that downloaded the file.
-
-For example, The command to download the file on Windows will be copied:
-
-```sh
-$ transfer ~/temp/a.log w
-######################################################################## 100.0%
-1) Download link:
-https://transfer.sh/y0qr2c/a.log
-
-2) Linux or macOS download command:
-wget https://transfer.sh/y0qr2c/a.log
-
-3) Windows download command:
-Invoke-WebRequest -Uri https://transfer.sh/y0qr2c/a.log -OutFile a.log
-```
-## Uploading and displaying URL and deletion token
 ```bash
-# tempfile
-URLFILE=$HOME/temp/transfersh.url
-# insert number of downloads and days saved
-if [ -f $1 ]; then
-read -p "Allowed number of downloads: " num_down
-read -p "Number of days on server: " num_save
-# transfer
-curl -sD - -H "Max-Downloads: $num_down" -H "Max-Days: $num_save"--progress-bar --upload-file $1 https://transfer.sh/$(basename $1) | grep -i -E 'transfer\.sh|x-url-delete' &> $URLFILE
-# display URL and deletion token
-if [ -f $URLFILE ]; then
-URL=$(tail -n1 $URLFILE)
-TOKEN=$(grep delete $URLFILE | awk -F "/" '{print $NF}')
-echo "*********************************"
-echo "Data is saved in $URLFILE"
-echo "**********************************"
-echo "URL is: $URL"
-echo "Deletion Token is: $TOKEN"
-echo "**********************************"
-else
-echo "NO URL-File found !!"
-fi
-else
-echo "!!!!!!"
-echo "\"$1\" not found !!"
-echo "!!!!!!"
-fi
+curl https://transfer.morawski.my/TOKEN/secret.txt \
+    -H "X-Decrypt-Password: mysecret" -o secret.txt
 ```
+
+## File Deletion
+
+Delete with query parameter:
+
+```bash
+curl -X DELETE "https://transfer.morawski.my/TOKEN/file.txt?delete=DELETION_TOKEN"
+```
+
+Delete with header:
+
+```bash
+curl -X DELETE https://transfer.morawski.my/TOKEN/file.txt \
+    -H "X-Deletion-Token: DELETION_TOKEN"
+```
+
+## Malware Scanning
+
+Ask the server to scan a file with ClamAV:
+
+```bash
+curl -X PUT --upload-file ./eicar.com https://transfer.morawski.my/eicar.com/scan
+```
+
+Submit a file to VirusTotal when the server is configured with an API key:
+
+```bash
+curl -X PUT --upload-file ./sample.bin https://transfer.morawski.my/sample.bin/virustotal
+```
+
+## Notes
+
+- Every upload lives inside a directory token, even single-file uploads.
+- `X-Url-Directory` and `X-Upload-Token` are returned on upload responses.
+- Google Drive storage is flat-only and rejects nested paths containing `/`.
