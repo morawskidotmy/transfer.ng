@@ -132,6 +132,21 @@ Both projects support:
 - Range requests for partial downloads
 - Deletion tokens
 
+## Why Fork?
+
+transfer.sh was archived and unmaintained. The directory system was added to transfer.ng to support:
+
+1. **Grouping related files** - Upload multiple files as a set
+2. **Multi-machine uploads** - Add files from different locations to the same directory
+3. **Bulk downloads** - Download entire directories as archives
+4. **Better organization** - Nested paths and directory listings
+
+See the main [README](README.md) for full documentation.
+
+## Security Note
+
+**Important Security Fix**: transfer.ng has addressed the IP filter and HTTP auth bypass vulnerability from transfer.sh (see [issue](https://github.com/dutchcoders/transfer.sh/issues/670)) with secure proxy settings. This security issue is **not present** in transfer.ng.
+
 ## Migration from transfer.sh
 
 transfer.ng is API-compatible for basic single-file uploads:
