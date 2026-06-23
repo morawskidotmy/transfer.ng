@@ -371,6 +371,6 @@ transfer --workers=16 --host=https://custom.server.com largefolder/
 - **Remco Verhoef** - Original author (transfer.sh)
 - **Andrea Spacca** - Maintainer
 - **Stefan Benten** - Maintainer
-- **morawskidotmy** - transfer.ng fork with directory support
+- **morawskidotmy** - transfer.ng fork
 
 Code released under the [GNU AGPL-3.0](LICENSE), with upstream portions under [MIT](LICENSE.mit). See [NOTICE.md](NOTICE.md) for details.
