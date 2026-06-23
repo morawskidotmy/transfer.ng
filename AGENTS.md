@@ -5,7 +5,7 @@
 transfer.ng is a Go-based file sharing service — a fork of [transfer.sh](https://github.com/dutchcoders/transfer.sh) with gofile-style directory support. Users upload files via HTTP (PUT/POST/curl) and receive shareable URLs. Files are organized into directories identified by random tokens, with write-protected access via `X-Upload-Token` headers.
 
 - **Module**: `github.com/morawskidotmy/transfer.ng`
-- **Go version**: 1.24+
+- **Go version**: 1.26.0 with toolchain `go1.26.4`
 - **Entry point**: `main.go`
 - **Build**: `go build ./...`
 - **Test**: `go test ./...`
@@ -37,7 +37,7 @@ main.go → cmd/cmd.go → server.New() → server.Run()
 | `cmd/` | CLI entry point, flag parsing, server bootstrap |
 | `server/` | HTTP handlers, routing, metadata, directory management |
 | `server/storage/` | Pluggable storage backends (local, S3, Storj, GDrive) |
-| `web/` | Embedded static assets (HTML templates, CSS, JS) |
+| `web/` | Embedded static assets (HTML templates, text templates, images) |
 
 ### Upload Flow
 
@@ -157,7 +157,7 @@ go build -o transfer.ng .
 ./transfer.ng --listener ":8080" --provider local --basedir /tmp/uploads
 
 # Run with S3
-./transfer.ng --listener ":8080" --provider s3 --s3-bucket mybucket
+./transfer.ng --listener ":8080" --provider s3 --bucket mybucket
 ```
 
 ## Bash Snippet (user-facing)

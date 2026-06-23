@@ -4,6 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Directory {{.Token}}</title>
+  <meta name="description" content="Directory listing for {{.Token}} with {{.TotalFiles}} file(s), archive downloads, and subdirectory navigation.">
+  <link rel="canonical" href="{{.RootURL}}">
+  <meta name="robots" content="noindex,nofollow">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Directory {{.Token}}">
+  <meta property="og:description" content="Shared transfer.ng directory with {{.TotalFiles}} file(s).">
+  <meta property="og:url" content="{{.RootURL}}">
+  <meta property="og:site_name" content="{{.WebAddress}}">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Directory {{.Token}}">
+  <meta name="twitter:description" content="Shared transfer.ng directory with {{.TotalFiles}} file(s).">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     :root {

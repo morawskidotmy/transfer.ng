@@ -23,6 +23,11 @@ transfer file1 file2 file3  # Multiple files
 transfer myfolder/          # Directory (preserves structure)
 transfer --workers=16 big/  # Custom parallelism
 
+Other useful options:
+transfer --host=https://files.example.com file.txt
+TRANSFER_MAX_RETRIES=0 transfer myfolder/   # 0 = unlimited retries
+TRANSFER_MIN_DELAY=500 transfer file.txt
+
 UPLOAD FILE
 ===========
 curl --upload-file ./file.txt {{.WebAddress}}file.txt
@@ -37,18 +42,18 @@ curl --upload-file ./file.txt {{.WebAddress}}TOKEN/file.txt \
   -H "X-Upload-Token: SECRET"
 
 Upload a whole folder:
-find ./myfolder -type f -exec \
+cd ./myfolder && find . -type f | xargs -P 8 -I {} \
   curl -H "X-Upload-Token: SECRET" \
-  --upload-file {} {{.WebAddress}}TOKEN/ \;
+  --upload-file {} "{{.WebAddress}}TOKEN/{}"
 
 List a directory:
 curl {{.WebAddress}}TOKEN/
 
 Download all files as zip:
-curl -O {{.WebAddress}}TOKEN/.zip
+curl -O {{.WebAddress}}zip/TOKEN/
 
 Download all files as tar.gz:
-curl -O {{.WebAddress}}TOKEN/.tar.gz
+curl -O {{.WebAddress}}tar.gz/TOKEN/
 
 Delete a directory and all its files:
 curl -X DELETE {{.WebAddress}}TOKEN/ \
@@ -69,7 +74,7 @@ curl {{.WebAddress}}download/TOKEN/filename -o filename
 
 DOWNLOAD ENCRYPTED FILE
 =======================
-curl {{.WebAddress}}get/TOKEN/filename \
+curl {{.WebAddress}}TOKEN/filename \
   -H "X-Decrypt-Password: secret" -o filename
 
 REQUEST HEADERS

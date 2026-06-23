@@ -255,7 +255,6 @@ func (t *globalThrottle) RecordSuccess() {
 
 type progressDisplay struct {
 	mu             sync.Mutex
-	dirURL         string
 	fileName       string
 	bytes          int64
 	total          int64
@@ -265,9 +264,8 @@ type progressDisplay struct {
 	isTTY          bool
 }
 
-func newProgressDisplay(dirURL string, totalFiles int64, workers int) *progressDisplay {
+func newProgressDisplay(totalFiles int64, workers int) *progressDisplay {
 	return &progressDisplay{
-		dirURL:     dirURL,
 		totalFiles: totalFiles,
 		workers:    workers,
 		isTTY:      term.IsTerminal(int(os.Stdout.Fd())),
@@ -305,7 +303,6 @@ func (p *progressDisplay) render() {
 	name := p.fileName
 	current := p.bytes
 	total := p.total
-	dirURL := p.dirURL
 	completed := p.completedFiles
 	totalF := p.totalFiles
 	workers := p.workers
@@ -333,17 +330,14 @@ func (p *progressDisplay) render() {
 	sb.WriteString("\n")
 	sb.WriteString("\033[2K\r")
 	fmt.Fprintf(&sb, "[%s] %3.0f%% %s | %d/%d files | w%d\n", bar, filePct, sizeStr, completed, totalF, workers)
-	sb.WriteString("\033[2K\r")
-	sb.WriteString(dirURL)
-	sb.WriteString("\n")
-	sb.WriteString("\033[3A\r")
+	sb.WriteString("\033[2A\r")
 
 	fmt.Print(sb.String())
 }
 
 func (p *progressDisplay) Finish() {
 	if p.isTTY {
-		fmt.Print("\033[3B\n")
+		fmt.Print("\033[2B\n")
 	}
 }
 
@@ -423,7 +417,7 @@ func main() {
 		limiter = newConcurrencyLimiter(defaultWorkers, maxWorkers, minWorkers)
 	}
 
-	display := newProgressDisplay(dirResp.DirectoryURL, int64(len(files)), limiter.Current())
+	display := newProgressDisplay(int64(len(files)), limiter.Current())
 
 	results := uploadFiles(config, dirResp, files, basePaths, throttle, display, limiter)
 
